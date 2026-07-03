@@ -1,0 +1,12 @@
+base_model: distilgpt2
+input: data/prompts.jsonl
+output_dir: outputs/smoke_vanilla
+limit: 5
+max_new_tokens: 32
+methods:
+  - vanilla
+precisions:
+  - fp16
+allow_cpu_fp32_fallback: true
+seed: 0
+device_map: auto

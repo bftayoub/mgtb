@@ -1,0 +1,144 @@
+Metadata-Version: 2.4
+Name: mgtb-v3
+Version: 0.1.0
+Summary: Window-level MGT-B v3 monitoring and backtracking controller for HuggingFace generation.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch
+Requires-Dist: transformers
+Requires-Dist: accelerate
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: pandas
+Requires-Dist: pyyaml
+Requires-Dist: tqdm
+Requires-Dist: matplotlib
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Provides-Extra: eval
+Requires-Dist: datasets; extra == "eval"
+
+# MGT-B v3
+
+MGT-B v3 is a clean MVP for inference-time monitoring of autoregressive reasoning traces, aimed at small and quantized models such as INT4 HuggingFace causal LMs.
+
+The controller does not fine-tune the language model. It monitors generated tokens, aggregates robust degeneration features over windows, detects suspicious regime changes, and can backtrack to a likely changepoint before re-decoding with targeted anti-degeneration constraints.
+
+Important: this project does not claim an exact Ville guarantee. LLM scores are dependent, windows overlap, and p-values are not conditionally valid by construction. The CUSUM-e / e-detector form is a design motivation; the operational threshold is calibrated empirically on held-out healthy traces.
+
+## Install
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+## Structure
+
+```text
+mgtb_v3/
+  features/       token and window features
+  calibration/    ECDF, positional buckets, empirical threshold
+  detector/       betting functions and CUSUM-e detector
+  control/        cache crop, logits helpers, backtracking controller
+  generation/     HuggingFace monitored generation loop
+  eval/           metrics and ablation scaffolding
+  baselines/      vanilla-adjacent comparison baselines
+scripts/          feature extraction, calibration, generation, eval CLIs
+docs/             theory and implementation reference
+tests/            unit tests for core behavior
+```
+
+## Offline Feature Extraction
+
+```bash
+python scripts/extract_features.py \
+  --input data/healthy_traces.jsonl \
+  --output outputs/window_features.jsonl \
+  --config configs/mgtb_v3_default.yaml
+```
+
+Input traces must provide pre-sampling logits per generated token to compute entropy and chosen-token log-probability.
+
+## Calibration
+
+```bash
+python scripts/calibrate_threshold.py \
+  --input outputs/window_features.jsonl \
+  --calibrator-output outputs/calibrator.json \
+  --threshold-output outputs/threshold.json
+```
+
+This builds positional ECDF pools and chooses the smallest searched threshold whose observed false-alert rate per held-out healthy trace is below the configured target.
+
+For an autonomous precision-specific calibration run, use:
+
+```bash
+python scripts/calibrate_precision.py \
+  --config configs/calibration/compare_n100.yaml
+```
+
+This runs healthy vanilla generations for each requested precision, writes `window_features.jsonl`, `healthy_results.jsonl`, `calibrator.json`, `threshold.json`, `calibration_summary.json`, and a global `calibration_manifest.json` under `outputs/calibration/compare_n100/`. The reported `mu0` is a configurable quantile of healthy window scores for diagnostics; the current runtime detector consumes the ECDF calibrator and e-process threshold.
+
+## Generation
+
+```bash
+python scripts/run_generation.py \
+  --model distilgpt2 \
+  --prompt "Solve step by step:" \
+  --calibrator outputs/calibrator.json \
+  --threshold outputs/threshold.json \
+  --output outputs/generation.json \
+  --trace-log runs/trace.jsonl
+```
+
+## Evaluation
+
+```bash
+python scripts/run_eval.py --input outputs/results.jsonl --mode mgtb_v3_window
+```
+
+Supported comparison modes include `vanilla`, `mgtb_v2_baseline`, `mgtb_v3_window`, `random_trigger`, `direct_score_threshold`, fixed/adaptive backtracking, and feature knockouts.
+
+## Precision Comparison Runs
+
+Create one YAML or JSON file per experiment under `configs/tests/`, then run it:
+
+```bash
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/comparison_100_fp16_int4.yaml
+```
+
+Useful keys are `base_model`, `input`, `output_dir`, `limit`, `max_new_tokens`, `methods`, `precisions`, `config`, `calibration`, `seed`, `device_map`, and `allow_cpu_fp32_fallback`. The older `model` key is still accepted as a compatibility alias for `base_model`, and the older top-level `calibrator` / `threshold` pair is still accepted for single-calibration runs.
+
+For precision-specific MGT-B calibration, use one artifact pair per requested precision:
+
+```yaml
+calibration:
+  fp16:
+    calibrator: outputs/calibration/compare_n100/fp16/calibrator.json
+    threshold: outputs/calibration/compare_n100/fp16/threshold.json
+  int4:
+    calibrator: outputs/calibration/compare_n100/int4/calibrator.json
+    threshold: outputs/calibration/compare_n100/int4/threshold.json
+```
+
+For GSM8K, install the optional dataset dependency and use the built-in loader:
+
+```bash
+pip install -e ".[eval]"
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/gsm8k_qwen_1p5b_fp16_int4.yaml
+```
+
+GSM8K configs use `dataset: gsm8k` instead of `input`, with `dataset_name`, `dataset_config`, `split`, and `prompt_style` controlling the HuggingFace dataset source and prompt template.
+
+CLI arguments override the config file, for example:
+
+```bash
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/comparison_100_fp16_int4.yaml \
+  --limit 10 \
+  --output-dir outputs/debug_10
+```

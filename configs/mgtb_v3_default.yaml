@@ -1,0 +1,31 @@
+window:
+  window_size: 64
+  stride: 32
+  entropy_eps: 1.0e-8
+  ngram_min: 6
+  ngram_max: 8
+  exclude_prompt_ngrams: true
+
+detector:
+  target_false_alert_rate: 0.05
+  threshold: null
+  p_clip: 1.0e-6
+  betting_gammas: [0.1, 0.3, 0.5, 0.7]
+  refractory_windows: 2
+
+backtracking:
+  max_rerolls: 3
+  margin_tokens: 64
+  fixed_rollback_tokens: null
+  use_adaptive_changepoint: true
+  redecode_temperature: 0.6
+  repetition_penalty: 1.1
+  use_no_bad_ngrams: true
+
+score:
+  w_entropy: 0.15
+  w_logprob: 0.10
+  w_repetition: 0.20
+  w_confident_loop: 0.35
+  w_local_entropy_pos: 0.18
+  w_local_entropy_neg: 0.02

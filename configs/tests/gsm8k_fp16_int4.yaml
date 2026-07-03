@@ -1,0 +1,21 @@
+base_model: Qwen/Qwen2.5-Math-1.5B-Instruct
+dataset: gsm8k
+dataset_name: gsm8k
+dataset_config: main
+split: test
+prompt_style: gsm8k_cot
+output_dir: outputs/gsm8k_fp16_int4
+limit: 100
+max_new_tokens: 256
+methods:
+  - vanilla
+  - mgtb_v3_window
+precisions:
+  - fp16
+  - int4
+config: configs/mgtb_v3_default.yaml
+calibrator: outputs/calibrator.json
+threshold: outputs/threshold.json
+seed: 0
+device_map: auto
+allow_cpu_fp32_fallback: false

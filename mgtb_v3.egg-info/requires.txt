@@ -1,0 +1,15 @@
+torch
+transformers
+accelerate
+numpy
+scipy
+pandas
+pyyaml
+tqdm
+matplotlib
+
+[dev]
+pytest
+
+[eval]
+datasets

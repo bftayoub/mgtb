@@ -1,0 +1,27 @@
+base_model: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+dataset: gsm8k
+dataset_name: gsm8k
+dataset_config: main
+split: test
+prompt_style: gsm8k_cot
+output_dir: outputs/gsm8k_qwen_1p5b_fp16_int4
+limit: 100
+max_new_tokens: 2048
+methods:
+  - vanilla
+  - mgtb_v3_window
+precisions:
+  - fp16
+  - int4
+config: configs/mgtb_v3_default.yaml
+calibration:
+  fp16:
+    calibrator: outputs/calibration/compare_n100/fp16/calibrator.json
+    threshold: outputs/calibration/compare_n100/fp16/threshold.json
+  int4:
+    calibrator: outputs/calibration/compare_n100/int4/calibrator.json
+    threshold: outputs/calibration/compare_n100/int4/threshold.json
+seed: 0
+device_map: auto
+allow_cpu_fp32_fallback: false
+progress_interval: 20

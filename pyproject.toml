@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mgtb-v3"
+version = "0.1.0"
+description = "Window-level MGT-B v3 monitoring and backtracking controller for HuggingFace generation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "transformers",
+  "accelerate",
+  "numpy",
+  "scipy",
+  "pandas",
+  "pyyaml",
+  "tqdm",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+eval = ["datasets"]
+
+[tool.setuptools.packages.find]
+include = ["mgtb_v3*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
