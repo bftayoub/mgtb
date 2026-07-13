@@ -33,6 +33,8 @@ class BacktrackingConfig:
     redecode_temperature: float = 0.6
     repetition_penalty: float = 1.1
     use_no_bad_ngrams: bool = True
+    inject_wait_on_backtrack: bool = False
+    wait_injection_text: str = "\nWait. Re-check the calculation.\n"
 
 
 @dataclass

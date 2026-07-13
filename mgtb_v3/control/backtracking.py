@@ -34,6 +34,7 @@ class BacktrackingController:
             "rollback_pos": rollback_pos,
             "bad_ngrams": bad_ngrams,
             "reroll_index": self.reroll_count,
+            "wait_injection_text": self.config.wait_injection_text if self.config.inject_wait_on_backtrack else "",
             "decode_overrides": {
                 "temperature": self.config.redecode_temperature,
                 "repetition_penalty": self.config.repetition_penalty,

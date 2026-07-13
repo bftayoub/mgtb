@@ -19,6 +19,13 @@ from mgtb_v3.calibration.positional import DEFAULT_BUCKETS, PositionalCalibrator
 from mgtb_v3.calibration.threshold import calibrate_threshold
 from mgtb_v3.config import load_config
 from mgtb_v3.eval.gsm8k import load_gsm8k_items, score_gsm8k
+from mgtb_v3.eval.math500 import (
+    DEFAULT_DATASET_CONFIG as MATH500_DEFAULT_DATASET_CONFIG,
+    DEFAULT_DATASET_NAME as MATH500_DEFAULT_DATASET_NAME,
+    DEFAULT_PROMPT_STYLE as MATH500_DEFAULT_PROMPT_STYLE,
+    load_math500_items,
+    score_math500,
+)
 from mgtb_v3.features.window_features import TrajectoryMonitor, linear_window_score
 from mgtb_v3.generation.hf_loop import _sample_token
 
@@ -78,13 +85,20 @@ def load_calibration_settings(path: str | Path) -> dict[str, Any]:
     if isinstance(settings["precisions"], str):
         settings["precisions"] = [settings["precisions"]]
     settings["precisions"] = [str(p) for p in settings["precisions"]]
+    if settings.get("dataset") == "math500":
+        if settings.get("dataset_name") == DEFAULT_CALIBRATION_SETTINGS["dataset_name"]:
+            settings["dataset_name"] = MATH500_DEFAULT_DATASET_NAME
+        if settings.get("dataset_config") == DEFAULT_CALIBRATION_SETTINGS["dataset_config"]:
+            settings["dataset_config"] = MATH500_DEFAULT_DATASET_CONFIG
+        if settings.get("prompt_style") == DEFAULT_CALIBRATION_SETTINGS["prompt_style"]:
+            settings["prompt_style"] = MATH500_DEFAULT_PROMPT_STYLE
 
     if not settings.get("base_model"):
         raise SystemExit("Missing required setting: base_model.")
-    if settings.get("dataset") and settings["dataset"] != "gsm8k":
-        raise SystemExit(f"Unsupported dataset {settings['dataset']!r}; expected 'gsm8k'.")
+    if settings.get("dataset") and settings["dataset"] not in {"gsm8k", "math500"}:
+        raise SystemExit(f"Unsupported dataset {settings['dataset']!r}; expected one of: gsm8k, math500.")
     if not settings.get("dataset") and not settings.get("input"):
-        raise SystemExit("Missing data source: provide input or set dataset: gsm8k.")
+        raise SystemExit("Missing data source: provide input or set dataset: gsm8k or math500.")
     if not 0.0 <= float(settings["mu0_quantile"]) <= 1.0:
         raise SystemExit("mu0_quantile must be in [0, 1].")
     return settings
@@ -124,6 +138,15 @@ def run_calibration(settings: dict[str, Any]) -> dict[str, Any]:
 def _load_calibration_items(settings: dict[str, Any]) -> list[dict[str, Any]]:
     if settings.get("dataset") == "gsm8k":
         return load_gsm8k_items(
+            dataset_name=settings["dataset_name"],
+            dataset_config=settings["dataset_config"],
+            split=settings["split"],
+            limit=settings["limit"],
+            seed=settings["seed"],
+            prompt_style=settings["prompt_style"],
+        )
+    if settings.get("dataset") == "math500":
+        return load_math500_items(
             dataset_name=settings["dataset_name"],
             dataset_config=settings["dataset_config"],
             split=settings["split"],
@@ -315,7 +338,10 @@ def _build_result_row(
     run_id: str,
 ) -> dict[str, Any]:
     reference = item.get("reference_answer") or item.get("answer")
-    score = score_gsm8k(generated["completion_text"] or generated["text"], reference) if reference is not None else {}
+    if item.get("dataset") == "math500":
+        score = score_math500(generated["completion_text"] or generated["text"], reference)
+    else:
+        score = score_gsm8k(generated["completion_text"] or generated["text"], reference) if reference is not None else {}
     return {
         "run_id": run_id,
         "id": item.get("id", index),

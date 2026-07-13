@@ -1,0 +1,23 @@
+base_model: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+dataset: math500
+dataset_name: HuggingFaceH4/MATH-500
+dataset_config: default
+split: test
+prompt_style: math500_cot
+output_dir: outputs/math500_2_int4_logthr10
+limit: 100
+max_new_tokens: 20000
+methods:
+  - vanilla
+  - mgtb_v3_window
+precisions:
+  - int4
+config: configs/mgtb_v3_default.yaml
+calibration:
+  int4:
+    calibrator: outputs/calibration/math500_n100/int4/calibrator.json
+    threshold: outputs/calibration/math500_n100/int4/threshold_log10.json
+seed: 2
+device_map: auto
+allow_cpu_fp32_fallback: false
+progress_interval: 20

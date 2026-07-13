@@ -114,6 +114,18 @@ python scripts/run_precision_comparison.py \
 
 GSM8K configs use `dataset: gsm8k` instead of `input`, with `dataset_name`, `dataset_config`, `split`, and `prompt_style` controlling the HuggingFace dataset source and prompt template.
 
+MATH-500 uses the same config-first path:
+
+```bash
+python scripts/calibrate_precision.py \
+  --config configs/calibration/math500_n100.yaml
+
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/math500_fp16_int4.yaml
+```
+
+MATH-500 configs use `dataset: math500`, defaulting to `dataset_name: HuggingFaceH4/MATH-500`, `dataset_config: default`, `split: test`, and `prompt_style: math500_cot`. The scorer compares normalized final answers after the `####` marker and handles common LaTeX forms such as `\boxed{...}`, `\frac{...}{...}`, `\sqrt{...}`, and `\text{...}`; it is exact-normalized scoring, not a full symbolic-equivalence prover.
+
 CLI arguments override the config file, for example:
 
 ```bash

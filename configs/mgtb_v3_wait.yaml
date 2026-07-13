@@ -21,8 +21,8 @@ backtracking:
   redecode_temperature: 0.6
   repetition_penalty: 1.1
   use_no_bad_ngrams: true
-  inject_wait_on_backtrack: false
-  wait_injection_text: "\nWait. Re-check the calculation.\n"
+  inject_wait_on_backtrack: true
+  wait_injection_text: "\nWait. Re-check the calculation, then give the final answer.\n"
 
 score:
   w_entropy: 0.15

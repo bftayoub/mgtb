@@ -4,9 +4,9 @@ dataset_name: gsm8k
 dataset_config: main
 split: test
 prompt_style: gsm8k_cot
-output_dir: outputs/gsm8k_qwen_1p5b_fp16_int4
+output_dir: outputs/testn100_8192_0
 limit: 100
-max_new_tokens: 2048
+max_new_tokens: 8192
 methods:
   - vanilla
   - mgtb_v3_window

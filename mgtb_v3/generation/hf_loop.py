@@ -87,9 +87,10 @@ def generate_with_mgtb_v3(
                 )
                 logger.log_window(window_score)
                 if update["alert"]:
+                    active_prompt_len = monitor.prompt_len
                     cp_window = detector.changepoint_window()
-                    cp_token = prompt_len + cp_window * config.window.stride
-                    rollback = max(prompt_len, cp_token - config.backtracking.margin_tokens)
+                    cp_token = active_prompt_len + cp_window * config.window.stride
+                    rollback = max(active_prompt_len, cp_token - config.backtracking.margin_tokens)
                     alert = AlertInfo(
                         window_index=features.window_index,
                         token_pos=features.end_pos,
@@ -101,10 +102,20 @@ def generate_with_mgtb_v3(
                     )
                     alerts.append(alert)
                     if do_backtracking:
-                        event = backtracker.on_alert(alert, tokens, cache, monitor, detector, prompt_len)
+                        event = backtracker.on_alert(alert, tokens, cache, monitor, detector, active_prompt_len)
                         if event.get("applied"):
                             tokens = event["tokens"]
                             cache = event["cache"]
+                            injection_text = str(event.get("wait_injection_text") or "")
+                            injection_tokens = _encode_injection_tokens(tokenizer, injection_text)
+                            if injection_tokens:
+                                tokens = [*tokens, *injection_tokens]
+                                cache = None
+                                monitor = TrajectoryMonitor(config, prompt_tokens=tokens)
+                                event["injected_token_count"] = len(injection_tokens)
+                                event["injected_tokens"] = injection_tokens
+                            else:
+                                event["injected_token_count"] = 0
                             generated = torch.tensor([tokens], device=model.device)
                             overrides = event.get("decode_overrides", {})
                             decode_temperature = float(overrides.get("temperature", decode_temperature))
@@ -141,6 +152,21 @@ def _sample_token(
     logits = adjusted / max(float(temperature), 1e-6)
     probs = torch.nn.functional.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+
+def _encode_injection_tokens(tokenizer, text: str) -> list[int]:
+    if not text:
+        return []
+    try:
+        encoded = tokenizer(text, add_special_tokens=False)
+    except TypeError:
+        encoded = tokenizer(text)
+    input_ids = encoded["input_ids"] if isinstance(encoded, dict) else encoded.input_ids
+    if hasattr(input_ids, "tolist"):
+        input_ids = input_ids.tolist()
+    if input_ids and isinstance(input_ids[0], list):
+        input_ids = input_ids[0]
+    return [int(token_id) for token_id in input_ids]
 
 
 def _mask_bad_ngram_completions(logits, generated_tokens: list[int], bad_ngrams: list[tuple[int, ...]]) -> None:

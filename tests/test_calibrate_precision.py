@@ -87,6 +87,27 @@ def test_load_calibration_settings_reads_required_fields(tmp_path):
     assert settings["mu0_quantile"] == 0.75
 
 
+def test_load_calibration_settings_sets_math500_defaults(tmp_path):
+    config_path = tmp_path / "calibration.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "base_model: dummy-model",
+                "dataset: math500",
+                "precisions: [fp16]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    settings = calibration.load_calibration_settings(config_path)
+
+    assert settings["dataset_name"] == "HuggingFaceH4/MATH-500"
+    assert settings["dataset_config"] == "default"
+    assert settings["prompt_style"] == "math500_cot"
+
+
 def test_calibrate_precision_writes_outputs_per_precision(tmp_path, monkeypatch):
     output_dir = tmp_path / "calibration"
     mgtb_config = tmp_path / "mgtb.yaml"

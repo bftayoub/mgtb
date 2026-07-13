@@ -1,0 +1,39 @@
+base_model: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+dataset: math500
+dataset_name: HuggingFaceH4/MATH-500
+dataset_config: default
+split: test
+prompt_style: math500_cot
+output_dir: outputs/math500_unseen109_int4_logthr10
+
+# Confirmatory split frozen on 2026-07-13: exclude every MATH-500 problem
+# already present in calibration or evaluation artifacts.
+exclude_ids_from:
+  - outputs/calibration/math500_n100/fp16/all_results.jsonl
+  - outputs/calibration/math500_n100/int4/all_results.jsonl
+  - outputs/math500_0/results.jsonl
+  - outputs/math500_1/results.jsonl
+  - outputs/math500_1_int4_mgtb_logthr10/results.jsonl
+  - outputs/math500_2_int4_logthr10/results.jsonl
+  - outputs/math500_3_int4_logthr10/results.jsonl
+expected_num_excluded: 391
+expected_excluded_ids_sha256: 04c2a56337ca2e21b67276291b5f2bd7e73e1d09a92e4f891747f09681d0e9d2
+expected_num_items: 109
+expected_selected_ids_sha256: d95269eb80fe9cd2278209d018f0912c50c64d2f50f559215636d84f08a3062b
+
+limit: 109
+max_new_tokens: 20000
+methods:
+  - vanilla
+  - mgtb_v3_window
+precisions:
+  - int4
+config: configs/mgtb_v3_default.yaml
+calibration:
+  int4:
+    calibrator: outputs/calibration/math500_n100/int4/calibrator.json
+    threshold: outputs/calibration/math500_n100/int4/threshold_log10.json
+seed: 4
+device_map: auto
+allow_cpu_fp32_fallback: false
+progress_interval: 20
