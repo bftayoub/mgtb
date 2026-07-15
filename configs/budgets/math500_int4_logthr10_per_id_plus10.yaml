@@ -1,0 +1,10 @@
+tolerance: 0.10
+expected_num_items: 500
+
+# Ordered deduplication: first strict-logthr10 MGT-B trajectory wins per ID.
+sources:
+  - results: outputs/math500_1_int4_mgtb_logthr10/results.jsonl
+  - results: outputs/math500_2_int4_logthr10/results.jsonl
+  - results: outputs/math500_3_int4_logthr10/results.jsonl
+  - results: outputs/math500_unseen109_int4_logthr10/results.jsonl
+  - results: outputs/math500_missing33_int4_mgtb_logthr10/results.jsonl

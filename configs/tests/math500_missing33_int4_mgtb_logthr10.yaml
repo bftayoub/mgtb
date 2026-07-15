@@ -1,0 +1,37 @@
+# Complete strict logthr10 MGT-B coverage for the 33 IDs unique to seed 0.
+base_model: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+dataset: math500
+dataset_name: HuggingFaceH4/MATH-500
+dataset_config: default
+split: test
+prompt_style: math500_cot
+output_dir: outputs/math500_missing33_int4_mgtb_logthr10
+
+include_ids_from:
+  - outputs/math500_0/results.jsonl
+exclude_ids_from:
+  - outputs/math500_1/results.jsonl
+  - outputs/math500_1_int4_mgtb_logthr10/results.jsonl
+  - outputs/math500_2_int4_logthr10/results.jsonl
+  - outputs/math500_3_int4_logthr10/results.jsonl
+  - outputs/math500_unseen109_int4_logthr10/results.jsonl
+expected_num_excluded: 467
+expected_excluded_ids_sha256: 4c534934fa1e55a51829fee40cae749317f91983c457a99824540ffac38a9d20
+expected_num_items: 33
+expected_selected_ids_sha256: 5af066462833cf3f09238e9e44be411df027c7301fcd2defdb6451baae715515
+
+limit: 33
+max_new_tokens: 20000
+methods:
+  - mgtb_v3_window
+precisions:
+  - int4
+config: configs/mgtb_v3_default.yaml
+calibration:
+  int4:
+    calibrator: outputs/calibration/math500_n100/int4/calibrator.json
+    threshold: outputs/calibration/math500_n100/int4/threshold_log10.json
+seed: 0
+device_map: cuda:0
+allow_cpu_fp32_fallback: false
+progress_interval: 5

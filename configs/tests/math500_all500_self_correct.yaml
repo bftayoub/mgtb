@@ -1,0 +1,38 @@
+# Self-correction only, on the frozen union of seed 0/1/2/3 and unseen.
+# Existing vanilla/MGT-B rows are intentionally not regenerated.
+base_model: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+dataset: math500
+dataset_name: HuggingFaceH4/MATH-500
+dataset_config: default
+split: test
+prompt_style: math500_cot
+output_dir: outputs/math500_all500_self_correct
+include_ids_from:
+  - outputs/math500_0/results.jsonl
+  - outputs/math500_1/results.jsonl
+  - outputs/math500_1_int4_mgtb_logthr10/results.jsonl
+  - outputs/math500_2_int4_logthr10/results.jsonl
+  - outputs/math500_3_int4_logthr10/results.jsonl
+  - outputs/math500_unseen109_int4_logthr10/results.jsonl
+run_seed_from:
+  - outputs/math500_1/results.jsonl
+  - outputs/math500_2_int4_logthr10/results.jsonl
+  - outputs/math500_3_int4_logthr10/results.jsonl
+  - outputs/math500_unseen109_int4_logthr10/results.jsonl
+  - outputs/math500_0/results.jsonl
+expected_num_items: 500
+expected_selected_ids_sha256: ea5794716f49ab520e2ce8c87e69217848624b40273a6974b7d98f4294950cfe
+limit: 500
+max_new_tokens: 20000
+methods:
+  - self_correct
+precisions:
+  - int4
+config: configs/mgtb_v3_default.yaml
+baseline_config: configs/baselines/priority1.yaml
+budget_profile: outputs/budgets/math500_int4_logthr10.json
+decode_budget_table: outputs/budgets/math500_int4_logthr10_per_id_plus10.json
+seed: 4
+device_map: cuda:0
+allow_cpu_fp32_fallback: false
+progress_interval: 20

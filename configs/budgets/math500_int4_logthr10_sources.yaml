@@ -1,0 +1,11 @@
+# Development-only sources used to freeze the compute budget for priority-1 controls.
+# No correctness labels are copied into the generated profile.
+pairs:
+  - vanilla_results: outputs/math500_1/results.jsonl
+    mgtb_results: outputs/math500_1_int4_mgtb_logthr10/results.jsonl
+  - vanilla_results: outputs/math500_2_int4_logthr10/results.jsonl
+    mgtb_results: outputs/math500_2_int4_logthr10/results.jsonl
+  - vanilla_results: outputs/math500_3_int4_logthr10/results.jsonl
+    mgtb_results: outputs/math500_3_int4_logthr10/results.jsonl
+  - vanilla_results: outputs/math500_unseen109_int4_logthr10/results.jsonl
+    mgtb_results: outputs/math500_unseen109_int4_logthr10/results.jsonl

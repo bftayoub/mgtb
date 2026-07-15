@@ -372,3 +372,229 @@ def test_load_items_can_exclude_ids_from_previous_results(tmp_path, monkeypatch)
 
     assert loaded_limits == [None]
     assert [item["id"] for item in items] == ["math-0", "math-2"]
+
+
+def test_load_items_can_include_ids_from_previous_results(tmp_path, monkeypatch):
+    inclusion_path = tmp_path / "previous_results.jsonl"
+    inclusion_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "math-1", "method": "vanilla"}),
+                json.dumps({"id": "math-1", "method": "mgtb_v3_window"}),
+                json.dumps({"id": "math-3", "method": "vanilla"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    loaded_limits = []
+
+    def fake_load_math500_items(**kwargs):
+        loaded_limits.append(kwargs["limit"])
+        return [{"id": f"math-{index}"} for index in range(5)]
+
+    monkeypatch.setattr(runner, "load_math500_items", fake_load_math500_items)
+    settings = {
+        "dataset": "math500",
+        "dataset_name": "dummy",
+        "dataset_config": "default",
+        "split": "test",
+        "limit": 5,
+        "seed": 4,
+        "prompt_style": "math500_cot",
+        "input": None,
+        "exclude_ids_from": [],
+        "include_ids_from": [str(inclusion_path)],
+    }
+
+    items = runner._load_items(settings)
+
+    assert loaded_limits == [None]
+    assert [item["id"] for item in items] == ["math-1", "math-3"]
+
+
+def test_run_seed_map_uses_first_vanilla_source_per_id(tmp_path):
+    first = tmp_path / "seed1.jsonl"
+    second = tmp_path / "seed2.jsonl"
+    first.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "a", "method": "vanilla", "requested_precision": "int4", "seed": 11}),
+                json.dumps({"id": "a", "method": "mgtb_v3_window", "requested_precision": "int4", "seed": 11}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "a", "method": "vanilla", "requested_precision": "int4", "seed": 22}),
+                json.dumps({"id": "b", "method": "vanilla", "requested_precision": "int4", "seed": 23}),
+                json.dumps({"id": "b", "method": "vanilla", "requested_precision": "fp16", "seed": 99}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    seeds = runner._load_run_seed_map([str(first), str(second)], "int4")
+
+    assert seeds == {"a": (11, str(first)), "b": (23, str(second))}
+
+
+def test_cuda_only_model_rejects_cpu_offload():
+    model = type("Model", (), {"hf_device_map": {"model.layers.0": "cuda:0", "lm_head": "cpu"}})()
+
+    with pytest.raises(RuntimeError, match="offloaded"):
+        runner._assert_cuda_only_model(model)
+
+
+def test_cuda_only_model_accepts_cuda_device_map():
+    model = type("Model", (), {"hf_device_map": {"": "cuda:0"}})()
+
+    runner._assert_cuda_only_model(model)
+
+
+def test_scheduled_control_uses_strict_per_id_budget_even_above_generic_cap(tmp_path, monkeypatch):
+    observed = {}
+
+    def fake_generate(*args, **kwargs):
+        observed["max_new_tokens"] = kwargs["max_new_tokens"]
+        return {
+            "text": "#### 4",
+            "tokens": [10, 11, 12],
+            "alerts": [],
+            "backtracks": [],
+            "interventions": [],
+            "trace_log_path": None,
+            "latency": 0.0,
+        }
+
+    monkeypatch.setattr(runner, "generate_scheduled_backtracking", fake_generate)
+    profile = {
+        "summary": {"mean_extra_decode_tokens": 0.0, "mean_vanilla_tokens_generated": 100.0},
+        "templates": [{"reference_primary_tokens": 100, "rollback_lengths": [], "extra_decode_tokens": 0}],
+    }
+
+    runner._run_baseline_method(
+        method="random_backtrack",
+        model=object(),
+        tokenizer=DummyTokenizer(),
+        prompt="Q",
+        max_new_tokens=20_000,
+        cfg=None,
+        profile=profile,
+        baseline_settings={"random_backtrack": {"minimum_position": 64}},
+        run_seed=1,
+        index=0,
+        effective_precision="int4",
+        trace_path=tmp_path / "trace.jsonl",
+        restart_selected=False,
+        max_decode_events=22_000,
+    )
+
+    assert observed["max_new_tokens"] == 22_000
+
+
+def test_priority1_methods_are_config_selectable(tmp_path, monkeypatch):
+    output_dir = tmp_path / "out"
+    calibrator = tmp_path / "calibrator.json"
+    threshold = tmp_path / "threshold.json"
+    profile = tmp_path / "profile.json"
+    calibrator.write_text(json.dumps({"buckets": [[0, 512]], "p_clip": 1e-6, "score_pools_by_bucket": {"0-512": [0.0, 1.0]}}), encoding="utf-8")
+    threshold.write_text(json.dumps({"threshold": 2.0}), encoding="utf-8")
+    profile.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "condition": {"base_model": "dummy-model", "precision": "int4", "dataset": "gsm8k", "threshold_path": str(threshold)},
+                "summary": {"mean_extra_decode_tokens": 2.0, "mean_vanilla_tokens_generated": 4.0},
+                "templates": [{"reference_primary_tokens": 4, "rollback_lengths": [2], "extra_decode_tokens": 2}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_config = tmp_path / "run.json"
+    run_config.write_text(
+        json.dumps(
+            {
+                "base_model": "dummy-model",
+                "dataset": "gsm8k",
+                "output_dir": str(output_dir),
+                "limit": 1,
+                "methods": ["vanilla", "mgtb_v3_window", "random_backtrack", "periodic_backtrack", "restart", "self_correct"],
+                "precisions": ["int4"],
+                "calibration": {"int4": {"calibrator": str(calibrator), "threshold": str(threshold)}},
+                "budget_profile": str(profile),
+                "progress_interval": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    item = {"id": "x", "dataset": "gsm8k", "split": "test", "prompt": "Q", "answer": "#### 4", "reference_answer": "4"}
+    monkeypatch.setattr(runner, "load_gsm8k_items", lambda **kwargs: [item])
+    monkeypatch.setattr(runner, "_load_model", lambda *args: (object(), DummyTokenizer(), "int4"))
+    monkeypatch.setattr(
+        runner,
+        "_run_vanilla",
+        lambda *args: {"text": "#### 4", "tokens": [10, 11, 12], "alerts": [], "backtracks": [], "trace_log_path": None, "latency": 0.01},
+    )
+    monkeypatch.setattr(
+        runner,
+        "generate_with_mgtb_v3",
+        lambda *args, **kwargs: GenerationResult(text="#### 4", tokens=[10, 11, 12], trace_log_path=None),
+    )
+    seen = []
+
+    def fake_baseline_method(**kwargs):
+        seen.append(kwargs["method"])
+        return {
+            "text": "#### 4",
+            "tokens": [10, 11, 12],
+            "alerts": [],
+            "backtracks": [],
+            "interventions": [{"type": kwargs["method"]}],
+            "trace_log_path": None,
+            "latency": 0.01,
+            "primary_tokens_generated": 1,
+            "final_tokens_generated": 1,
+            "decode_token_events_total": 3,
+            "extra_decode_tokens": 2,
+        }
+
+    monkeypatch.setattr(runner, "_run_baseline_method", fake_baseline_method)
+    runner.main(["--run-config", str(run_config)])
+
+    rows = [json.loads(line) for line in (output_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {row["method"] for row in rows} == {"vanilla", "mgtb_v3_window", "random_backtrack", "periodic_backtrack", "restart", "self_correct"}
+    assert seen == ["random_backtrack", "periodic_backtrack", "restart", "self_correct"]
+    assert all(row["budget_profile_path"] == str(profile) for row in rows if row["method"] not in {"vanilla", "mgtb_v3_window"})
+    budget_summary = json.loads((output_dir / "budget_summary.json").read_text(encoding="utf-8"))
+    assert budget_summary["target_mean_extra_decode_tokens"] == 2.0
+    assert set(budget_summary["groups"]) == {
+        "int4::vanilla",
+        "int4::mgtb_v3_window",
+        "int4::random_backtrack",
+        "int4::periodic_backtrack",
+        "int4::restart",
+        "int4::self_correct",
+    }
+
+
+def test_control_baselines_require_budget_profile(tmp_path):
+    with pytest.raises(SystemExit, match="require an existing budget_profile"):
+        runner.main(
+            [
+                "--base-model",
+                "dummy-model",
+                "--dataset",
+                "gsm8k",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--methods",
+                "restart",
+                "--precisions",
+                "fp16",
+            ]
+        )

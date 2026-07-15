@@ -1,0 +1,10 @@
+random_backtrack:
+  minimum_position: 64
+
+periodic_backtrack:
+  minimum_position: 64
+
+self_correct:
+  instruction: "\nWait. Re-check the previous solution carefully. Return the corrected final answer on a line formatted as #### <answer>.\n"
+  temperature: 0.6
+  repetition_penalty: 1.1

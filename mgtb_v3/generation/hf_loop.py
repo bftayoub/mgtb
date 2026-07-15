@@ -144,14 +144,24 @@ def _sample_token(
     adjusted = logits.detach().clone()
     generated_tokens = generated_tokens or []
     if repetition_penalty and repetition_penalty > 1.0 and generated_tokens:
-        for token_id in set(int(t) for t in generated_tokens):
-            if 0 <= token_id < adjusted.shape[-1]:
-                value = adjusted[:, token_id]
-                adjusted[:, token_id] = torch.where(value < 0, value * repetition_penalty, value / repetition_penalty)
+        _apply_repetition_penalty_(adjusted, generated_tokens, float(repetition_penalty))
     _mask_bad_ngram_completions(adjusted, generated_tokens, bad_ngrams or [])
     logits = adjusted / max(float(temperature), 1e-6)
     probs = torch.nn.functional.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+
+def _apply_repetition_penalty_(logits, generated_tokens: list[int], penalty: float) -> None:
+    """Apply the HF-style repetition penalty with a constant number of GPU ops."""
+    import torch
+
+    token_ids = sorted({int(token_id) for token_id in generated_tokens if 0 <= int(token_id) < logits.shape[-1]})
+    if not token_ids:
+        return
+    index = torch.tensor(token_ids, dtype=torch.long, device=logits.device)
+    values = logits.index_select(-1, index)
+    penalized = torch.where(values < 0, values * penalty, values / penalty)
+    logits.index_copy_(-1, index, penalized)
 
 
 def _encode_injection_tokens(tokenizer, text: str) -> list[int]:

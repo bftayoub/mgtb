@@ -2,7 +2,12 @@ import torch
 
 from mgtb_v3.config import BacktrackingConfig, DetectorConfig, MGTBV3Config, ScoreConfig, WindowConfig
 from mgtb_v3.generation import hf_loop
-from mgtb_v3.generation.hf_loop import _encode_injection_tokens, _mask_bad_ngram_completions, generate_with_mgtb_v3
+from mgtb_v3.generation.hf_loop import (
+    _apply_repetition_penalty_,
+    _encode_injection_tokens,
+    _mask_bad_ngram_completions,
+    generate_with_mgtb_v3,
+)
 
 
 def test_bad_ngram_completion_is_masked():
@@ -10,6 +15,14 @@ def test_bad_ngram_completion_is_masked():
     _mask_bad_ngram_completions(logits, [4, 5], [(4, 5, 6), (7, 8, 9)])
     assert torch.isneginf(logits[0, 6])
     assert logits[0, 9] == 0.0
+
+
+def test_vectorized_repetition_penalty_matches_hf_rule():
+    logits = torch.tensor([[-4.0, -2.0, 3.0, 8.0]])
+
+    _apply_repetition_penalty_(logits, [1, 2, 2, 99], 2.0)
+
+    assert torch.equal(logits, torch.tensor([[-4.0, -4.0, 1.5, 8.0]]))
 
 
 def test_encode_injection_tokens_uses_no_special_tokens():

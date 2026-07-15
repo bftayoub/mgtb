@@ -21,37 +21,70 @@ Le seuil 10 est une ablation manuelle utilisant le calibrateur INT4 gelé. Sur l
 | Seed 2 | 100 | 29,0 % | 31,0 % | **+2,0 pts** | 5 | 3 |
 | Seed 3 | 200 | 35,0 % | 39,0 % | **+4,0 pts** | 14 | 6 |
 | Holdout `unseen109` | 109 | 31,19 % | 34,86 % | **+3,67 pts** | 6 | 2 |
+| Complément `missing33` | 33 | 45,45 % | 54,55 % | **+9,09 pts** | 9 | 6 |
 
 Le holdout contient les 109 problèmes qui n'étaient apparus dans aucun artefact antérieur de calibration ou d'évaluation. Il confirme la direction de l'effet, mais n'est pas significatif seul : test exact de McNemar `p=0,289`.
 
-## Résultat principal dédupliqué
+Le complément `missing33` couvre exactement les 33 problèmes qui n'étaient présents que dans le run seed 0. Son MGT-B utilise bien `log_threshold=10`. Toutefois, la sélection filtrée a réindexé ces problèmes : aucun des 33 seeds de génération MGT-B ne correspond au seed de sa trajectoire vanilla seed 0. Les chiffres `15/33` contre `18/33`, avec 9 corrections et 6 régressions (`p=0,607`), sont donc descriptifs et confondent effet de méthode et variabilité d'échantillonnage. Ils ne doivent pas remplacer seuls une comparaison seed-matched.
 
-Pour éviter de compter plusieurs fois les mêmes problèmes entre les trois premières seeds, une seule trajectoire est conservée par ancien problème (plus petite seed disponible), puis les 109 problèmes du holdout sont ajoutés.
+## Résultat étendu dédupliqué sur les 500 problèmes
+
+L'union de seed 0, seed 1, seed 2, seed 3 et `unseen109` couvre désormais les 500 problèmes de MATH-500. Pour les 467 problèmes déjà couverts à `log_threshold=10`, une seule paire seed-matched est conservée selon l'ordre seed 1, seed 2, seed 3, puis `unseen109`. Les 33 problèmes restants ajoutent le vanilla seed 0 et le nouveau MGT-B logthr10, avec la réserve de seed décrite ci-dessus.
 
 | Métrique | Vanilla | MGT-B |
 |---|---:|---:|
-| Problèmes uniques | 467 | 467 |
-| Réponses correctes | 146 | **167** |
-| Accuracy | 31,26 % | **35,76 %** |
-| Gain absolu | — | **+4,50 points** |
-| Gain relatif | — | **+14,4 %** |
+| Problèmes uniques | 500 | 500 |
+| Réponses correctes | 161 | **185** |
+| Accuracy | 32,20 % | **37,00 %** |
+| Gain absolu | — | **+4,80 points** |
+| Gain relatif | — | **+14,9 %** |
 
-- **Corrections / régressions :** 29 / 8, soit un ratio de 3,63:1
-- **Test exact de McNemar :** `p=0,000753`
-- **IC 95 % bootstrap apparié du gain :** environ `[+2,14 ; +7,07]` points
+- **Corrections / régressions :** 38 / 14, soit un ratio de 2,71:1
+- **Test exact de McNemar descriptif :** `p=0,001195`
+- **IC 95 % bootstrap par problème du gain :** environ `[+2,0 ; +7,6]` points
 
-En analyse secondaire, les 609 trajectoires appariées donnent 31,53 % pour vanilla et 35,80 % pour MGT-B (`+4,27` points ; 38 corrections contre 12 régressions). Cette agrégation contient des problèmes répétés et ne doit donc pas être présentée comme 609 observations indépendantes.
+Ces statistiques sur 500 problèmes sont utiles pour décrire la couverture complète, mais ne constituent pas encore le résultat confirmatoire principal en raison des seeds non appariés des 33 derniers problèmes. Le résultat seed-matched propre reste celui des 467 problèmes : vanilla `146/467 = 31,26 %`, MGT-B `167/467 = 35,76 %`, gain `+4,50` points, 29 corrections contre 8 régressions, test exact de McNemar `p=0,000753` et IC 95 % bootstrap approximatif `[+2,14 ; +7,07]` points.
+
+En analyse secondaire, les 642 trajectoires donnent 32,24 % pour vanilla et 36,76 % pour MGT-B (`+4,52` points ; 47 corrections contre 18 régressions ; `p=0,000422`). Cette agrégation contient des problèmes répétés, ainsi que 33 comparaisons non appariées en seed, et ne doit pas être présentée comme 642 observations indépendantes.
 
 ## Activation et coût
 
-Sur les 609 paires, MGT-B s'active dans 205 cas (33,66 %). Sur ces cas, l'accuracy passe de 19,02 % avec vanilla à 31,71 % avec MGT-B. Sur les 404 cas sans alerte, les completions vanilla et MGT-B sont identiques.
+Sur les 642 trajectoires, MGT-B s'active dans 214 cas (33,33 %). Sur ces cas, l'accuracy passe de 20,56 % avec vanilla à 32,71 % avec MGT-B. Sur les 609 paires historiques seed-matched, les 404 cas sans alerte restent strictement identiques. Cette vérification d'identité ne s'applique pas aux 33 nouvelles trajectoires, puisque leurs seeds diffèrent.
 
-| Coût moyen sur 609 paires | Vanilla | MGT-B | Variation |
+| Coût moyen sur 642 trajectoires | Vanilla | MGT-B | Variation |
 |---|---:|---:|---:|
-| Latence | 81,45 s | 100,26 s | **+23,1 %** |
-| Tokens conservés | 5 099,95 | 4 887,32 | −4,2 % |
-| Événements de génération | 5 099,95 | 5 133,28 | +0,65 % |
-| Tokens rééchantillonnés | 0 | 245,96 | +245,96 |
+| Latence | 80,76 s | 101,14 s | **+25,2 %** |
+| Tokens conservés | 5 073,76 | 4 883,21 | −3,8 % |
+| Événements de génération | 5 073,76 | 5 125,61 | +1,02 % |
+| Tokens rééchantillonnés | 0 | 242,39 | +242,39 |
+
+## Table de budget des contrôles à coût égal
+
+Une table gelée fournit désormais un plafond total de décodage pour chacun des 500 problèmes. Pour un problème `i`, si MGT-B a réellement échantillonné `E_i` tokens, intervention et redécodage compris, le contrôle peut utiliser au maximum :
+
+```text
+B_i = floor(1,10 × E_i)
+```
+
+La tolérance de +10 % porte donc sur tous les événements de génération, et non uniquement sur les tokens annulés. Le plafond s'applique également à la somme des phases primaire et secondaire de `restart` et `self_correct`.
+
+| Statistique de budget sur 500 problèmes | Valeur |
+|---|---:|
+| Événements MGT-B totaux | 2 481 327 |
+| Plafond total accordé aux contrôles | 2 729 240 |
+| Événements MGT-B moyens par problème | 4 962,65 |
+| Plafond moyen des contrôles par problème | 5 458,48 |
+| Tolérance | +10 % avec arrondi inférieur |
+
+La déduplication des budgets suit l'ordre seed 1, seed 2, seed 3, `unseen109`, puis `missing33`. La table ne contient ni réponses, ni labels de correction, ni texte de complétion. Les quatre configs de contrôle chargent cette table et enregistrent pour chaque sortie le budget MGT-B, le plafond autorisé, le budget observé et un indicateur de conformité.
+
+Artefacts reproductibles :
+
+- manifeste : `configs/budgets/math500_int4_logthr10_per_id_plus10.yaml`
+- constructeur : `scripts/build_per_id_budget.py`
+- table générée : `outputs/budgets/math500_int4_logthr10_per_id_plus10.json`
+
+La partie `missing33` de cette table est provisoire au même titre que son résultat : si les 33 problèmes sont rerun avec les seeds vanilla exacts, la table doit être reconstruite à partir du nouvel artefact MGT-B.
 
 ## Paramètres MGT-B et signification
 
@@ -103,13 +136,15 @@ Le calibrateur ECDF positionnel transforme ce score en p-value en fonction de la
 
 ## Conclusion utilisable dans l'article
 
-> Sur 467 problèmes MATH-500 uniques avec DeepSeek-R1-Distill-Qwen-1.5B en INT4, MGT-B avec `log_threshold=10` améliore l'accuracy de 31,26 % à 35,76 %, soit un gain absolu de 4,50 points. L'analyse appariée relève 29 corrections contre 8 régressions (`p=0,000753`). Un holdout indépendant de 109 problèmes jamais utilisés auparavant confirme la direction de l'effet avec un gain de 3,67 points. Les sorties restent strictement identiques à vanilla lorsqu'aucune alerte n'est déclenchée, ce qui localise l'amélioration aux interventions de backtracking.
+> L'union des runs couvre désormais les 500 problèmes de MATH-500. Sur cette couverture complète, vanilla obtient 161/500 (32,20 %) et MGT-B logthr10 185/500 (37,00 %), soit un écart descriptif de +4,80 points. Le sous-ensemble seed-matched de 467 problèmes demeure l'analyse confirmatoire propre : 31,26 % contre 35,76 %, +4,50 points, 29 corrections contre 8 régressions (`p=0,000753`). Les 33 problèmes complémentaires doivent être rerun avec les seeds vanilla gelés avant de promouvoir l'analyse 500-problèmes au rang de résultat principal apparié.
 
 Fichiers principaux :
 
 - configuration confirmatoire : `configs/tests/math500_unseen109_int4_logthr10.yaml`
 - résultats confirmatoires : `outputs/math500_unseen109_int4_logthr10/results.jsonl`
 - résumé confirmatoire : `outputs/math500_unseen109_int4_logthr10/summary.json`
+- configuration du complément : `configs/tests/math500_missing33_int4_mgtb_logthr10.yaml`
+- résultats du complément : `outputs/math500_missing33_int4_mgtb_logthr10/results.jsonl`
 - paramètres MGT-B : `configs/mgtb_v3_default.yaml`
 - seuil : `outputs/calibration/math500_n100/int4/threshold_log10.json`
 

@@ -18,9 +18,8 @@ class TraceLogger:
         if self._handle is None:
             return
         self._handle.write(json.dumps(_jsonable(event), ensure_ascii=False) + "\n")
-        self._handle.flush()
 
-    def log_token(self, pos: int, token_id: int, entropy: float, logprob: float) -> None:
+    def log_token(self, pos: int, token_id: int, entropy: float | None, logprob: float | None) -> None:
         self.log({"type": "token", "pos": pos, "token_id": token_id, "entropy": entropy, "logprob": logprob})
 
     def log_window(self, window_score) -> None:

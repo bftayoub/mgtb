@@ -134,3 +134,34 @@ python scripts/run_precision_comparison.py \
   --limit 10 \
   --output-dir outputs/debug_10
 ```
+
+### Compute-matched priority-1 controls
+
+The precision runner also supports six config-selectable methods:
+
+```yaml
+methods:
+  - vanilla
+  - mgtb_v3_window
+  - random_backtrack
+  - periodic_backtrack
+  - restart
+  - self_correct
+```
+
+The four controls use a frozen budget profile built from paired development runs, not from labels. Build the included MATH-500 INT4 profile once from the existing `log_threshold=10` artifacts:
+
+```bash
+python scripts/build_baseline_budget.py \
+  --manifest configs/budgets/math500_int4_logthr10_sources.yaml \
+  --output outputs/budgets/math500_int4_logthr10.json
+```
+
+Then run the all-method example:
+
+```bash
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/math500_priority1_int4.yaml
+```
+
+`random_backtrack` and `periodic_backtrack` preserve the empirical intervention and rollback budget while changing intervention positions. `restart` performs a deterministic, budget-matched subset of full second attempts. `self_correct` asks every answer for a short revision using the profile's mean extra-token budget. Results record the profile hash, intervention details, extra decode tokens, total decode events, and budget-match error.

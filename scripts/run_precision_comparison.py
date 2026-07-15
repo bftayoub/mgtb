@@ -11,6 +11,19 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from mgtb_v3.baselines.budget import (
+    assigned_template,
+    file_sha256,
+    load_profile,
+    load_per_id_budget,
+    per_id_budget_map,
+    periodic_schedule,
+    profile_sha256,
+    random_schedule,
+    restart_indices,
+    revision_token_budget,
+    stable_int_seed,
+)
 from mgtb_v3.calibration.positional import PositionalCalibrator
 from mgtb_v3.config import load_config
 from mgtb_v3.eval.gsm8k import load_gsm8k_items, score_gsm8k
@@ -22,6 +35,19 @@ from mgtb_v3.eval.math500 import (
     score_math500,
 )
 from mgtb_v3.generation.hf_loop import _sample_token, generate_with_mgtb_v3
+from mgtb_v3.generation.baseline_loop import generate_scheduled_backtracking
+
+
+METHODS = (
+    "vanilla",
+    "mgtb_v3_window",
+    "random_backtrack",
+    "periodic_backtrack",
+    "restart",
+    "self_correct",
+)
+SCHEDULED_BASELINES = {"random_backtrack", "periodic_backtrack"}
+PROFILE_BASELINES = SCHEDULED_BASELINES | {"restart", "self_correct"}
 
 
 DEFAULT_RUN_SETTINGS: dict[str, Any] = {
@@ -47,10 +73,15 @@ DEFAULT_RUN_SETTINGS: dict[str, Any] = {
     "allow_cpu_fp32_fallback": False,
     "progress_interval": 20,
     "exclude_ids_from": [],
+    "include_ids_from": [],
+    "run_seed_from": [],
     "expected_num_excluded": None,
     "expected_excluded_ids_sha256": None,
     "expected_num_items": None,
     "expected_selected_ids_sha256": None,
+    "budget_profile": None,
+    "decode_budget_table": None,
+    "baseline_config": None,
 }
 
 
@@ -70,7 +101,7 @@ def main(argv=None) -> None:
     parser.add_argument("--output-dir")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-new-tokens", type=int)
-    parser.add_argument("--methods", nargs="+", choices=["vanilla", "mgtb_v3_window"])
+    parser.add_argument("--methods", nargs="+", choices=METHODS)
     parser.add_argument("--precisions", nargs="+", choices=["fp16", "int4"])
     parser.add_argument("--config", help="MGT-B v3 controller config YAML.")
     parser.add_argument("--calibrator", help="Required for mgtb_v3_window.")
@@ -78,6 +109,9 @@ def main(argv=None) -> None:
     parser.add_argument("--seed", type=int)
     parser.add_argument("--device-map")
     parser.add_argument("--progress-interval", type=int, help="Print cumulative per-variant metrics every N examples.")
+    parser.add_argument("--budget-profile", help="Frozen JSON budget profile required by control baselines.")
+    parser.add_argument("--decode-budget-table", help="Optional strict per-ID total decode budget JSON.")
+    parser.add_argument("--baseline-config", help="Optional YAML/JSON settings for priority-1 control baselines.")
     parser.add_argument(
         "--allow-cpu-fp32-fallback",
         action="store_true",
@@ -104,6 +138,19 @@ def main(argv=None) -> None:
                 f"found {selected_digest}. Refusing to run because the confirmatory split has drifted."
             )
 
+    frozen_run_seeds: dict[str, dict[str, tuple[int, str]]] = {}
+    if settings.get("run_seed_from"):
+        selected_ids = {str(item.get("id")) for item in items}
+        for requested_precision in settings["precisions"]:
+            seed_map = _load_run_seed_map(settings["run_seed_from"], requested_precision)
+            missing_ids = sorted(selected_ids - set(seed_map))
+            if missing_ids:
+                raise SystemExit(
+                    f"run_seed_from has no {requested_precision} vanilla seed for {len(missing_ids)} selected IDs; "
+                    f"first missing ID: {missing_ids[0]}"
+                )
+            frozen_run_seeds[requested_precision] = seed_map
+
     output_dir = Path(settings["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     results_path = output_dir / "results.jsonl"
@@ -111,8 +158,21 @@ def main(argv=None) -> None:
     trace_dir = output_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
 
-    use_mgtb = "mgtb_v3_window" in settings["methods"]
-    cfg = load_config(settings["config"]) if use_mgtb else None
+    needs_controller_config = bool(set(settings["methods"]) & (SCHEDULED_BASELINES | {"mgtb_v3_window"}))
+    cfg = load_config(settings["config"]) if needs_controller_config else None
+    baseline_settings = _load_baseline_settings(settings.get("baseline_config"))
+    budget_profile = load_profile(settings["budget_profile"]) if set(settings["methods"]) & PROFILE_BASELINES else None
+    budget_profile_digest = profile_sha256(settings["budget_profile"]) if budget_profile else None
+    decode_budget_table = load_per_id_budget(settings["decode_budget_table"]) if settings.get("decode_budget_table") else None
+    decode_budgets = per_id_budget_map(decode_budget_table) if decode_budget_table else {}
+    decode_budget_digest = file_sha256(settings["decode_budget_table"]) if decode_budget_table else None
+    if decode_budget_table:
+        missing_budget_ids = sorted({str(item.get("id")) for item in items} - set(decode_budgets))
+        if missing_budget_ids:
+            raise SystemExit(
+                f"decode_budget_table has no entry for {len(missing_budget_ids)} selected IDs; "
+                f"first missing ID: {missing_budget_ids[0]}"
+            )
 
     import torch
 
@@ -126,23 +186,47 @@ def main(argv=None) -> None:
                 settings["device_map"],
                 settings["allow_cpu_fp32_fallback"],
             )
-            calibration = _load_calibration_for_precision(settings, precision, effective_precision) if use_mgtb else None
+            if budget_profile:
+                condition = budget_profile["condition"]
+                if condition["base_model"] != settings["base_model"] or condition["precision"] != effective_precision:
+                    raise SystemExit(
+                        "Budget profile condition does not match this run: "
+                        f"expected {condition['base_model']} / {condition['precision']}, "
+                        f"got {settings['base_model']} / {effective_precision}."
+                    )
+            if decode_budget_table:
+                condition = decode_budget_table["condition"]
+                if condition["base_model"] != settings["base_model"] or condition["precision"] != effective_precision:
+                    raise SystemExit(
+                        "Per-ID decode budget condition does not match this run: "
+                        f"expected {condition['base_model']} / {condition['precision']}, "
+                        f"got {settings['base_model']} / {effective_precision}."
+                    )
+            calibration = _load_calibration_for_precision(settings, precision, effective_precision) if "mgtb_v3_window" in settings["methods"] else None
+            restart_set = restart_indices(
+                num_items=len(items), profile=budget_profile, base_seed=settings["seed"], precision=effective_precision
+            ) if budget_profile and "restart" in settings["methods"] else set()
             try:
                 for method in settings["methods"]:
                     variant_rows: list[dict[str, Any]] = []
                     for index, item in enumerate(items):
-                        run_seed = _stable_seed(
-                            settings["seed"],
-                            item.get("dataset", "jsonl"),
-                            item.get("split", ""),
-                            index,
-                            precision,
-                        )
+                        frozen_seed = frozen_run_seeds.get(precision, {}).get(str(item.get("id")))
+                        if frozen_seed is not None:
+                            run_seed, run_seed_source = frozen_seed
+                        else:
+                            run_seed = _stable_seed(
+                                settings["seed"],
+                                item.get("dataset", "jsonl"),
+                                item.get("split", ""),
+                                index,
+                                precision,
+                            )
+                            run_seed_source = None
                         _seed_everything(run_seed)
                         started = time.time()
                         if method == "vanilla":
                             payload = _run_vanilla(model, tokenizer, item["prompt"], settings["max_new_tokens"])
-                        else:
+                        elif method == "mgtb_v3_window":
                             trace_path = trace_dir / f"{effective_precision}_{method}_{index:04d}.jsonl"
                             result = generate_with_mgtb_v3(
                                 model,
@@ -157,6 +241,25 @@ def main(argv=None) -> None:
                             )
                             payload = asdict(result)
                             payload["latency"] = getattr(result, "latency", time.time() - started)
+                        else:
+                            trace_path = trace_dir / f"{effective_precision}_{method}_{index:04d}.jsonl"
+                            decode_budget = decode_budgets.get(str(item.get("id")))
+                            payload = _run_baseline_method(
+                                method=method,
+                                model=model,
+                                tokenizer=tokenizer,
+                                prompt=item["prompt"],
+                                max_new_tokens=settings["max_new_tokens"],
+                                cfg=cfg,
+                                profile=budget_profile,
+                                baseline_settings=baseline_settings,
+                                run_seed=run_seed,
+                                index=index,
+                                effective_precision=effective_precision,
+                                trace_path=trace_path,
+                                restart_selected=index in restart_set,
+                                max_decode_events=int(decode_budget["control_max_decode_events"]) if decode_budget else None,
+                            )
                         prompt_token_count = len(tokenizer(item["prompt"])["input_ids"])
                         row = {
                             "id": item.get("id", index),
@@ -172,14 +275,43 @@ def main(argv=None) -> None:
                             "calibrator_path": calibration["calibrator_path"] if calibration else None,
                             "threshold_path": calibration["threshold_path"] if calibration else None,
                             "seed": run_seed,
+                            "seed_source_path": run_seed_source,
                             "prompt": item["prompt"],
+                            "budget_profile_path": settings["budget_profile"] if budget_profile else None,
+                            "budget_profile_sha256": budget_profile_digest,
+                            "budget_target_extra_tokens": budget_profile["summary"]["mean_extra_decode_tokens"] if budget_profile else None,
+                            "decode_budget_table_path": settings.get("decode_budget_table"),
+                            "decode_budget_table_sha256": decode_budget_digest,
+                            "budget_mgtb_decode_events": decode_budgets.get(str(item.get("id")), {}).get("mgtb_decode_events"),
+                            "budget_max_decode_events": decode_budgets.get(str(item.get("id")), {}).get("control_max_decode_events"),
                             **payload,
                         }
                         row.setdefault("latency", time.time() - started)
-                        row["tokens_generated"] = max(0, len(row.get("tokens", [])) - prompt_token_count)
-                        row["token_events_trace"] = _count_trace_token_events(row.get("trace_log_path"), row["tokens_generated"])
-                        row["extra_sampled"] = max(0, row["token_events_trace"] - row["tokens_generated"])
-                        row["completion_text"] = _completion_text(tokenizer, row.get("tokens", []), prompt_token_count, row.get("text"))
+                        decoded_tokens = max(0, len(row.get("tokens", [])) - prompt_token_count)
+                        row["tokens_generated"] = int(row.get("final_tokens_generated", decoded_tokens))
+                        row["primary_tokens_generated"] = int(row.get("primary_tokens_generated", decoded_tokens))
+                        row["final_tokens_generated"] = int(row.get("final_tokens_generated", row["tokens_generated"]))
+                        row["token_events_trace"] = int(
+                            row.get("decode_token_events_total", _count_trace_token_events(row.get("trace_log_path"), row["tokens_generated"]))
+                        )
+                        row["extra_sampled"] = int(row.get("extra_decode_tokens", max(0, row["token_events_trace"] - row["tokens_generated"])))
+                        row["decode_token_events_total"] = row["token_events_trace"]
+                        row["extra_decode_tokens"] = row["extra_sampled"]
+                        row["decode_budget_compliant"] = (
+                            row["decode_token_events_total"] <= int(row["budget_max_decode_events"])
+                            if row.get("budget_max_decode_events") is not None
+                            else None
+                        )
+                        row["completion_text"] = row.get("completion_text_override") or _completion_text(
+                            tokenizer, row.get("tokens", []), prompt_token_count, row.get("text")
+                        )
+                        row["interventions"] = row.get("interventions", row.get("backtracks", []))
+                        if row.get("budget_target_extra_tokens"):
+                            row["budget_match_relative_error"] = (
+                                row["extra_decode_tokens"] - float(row["budget_target_extra_tokens"])
+                            ) / float(row["budget_target_extra_tokens"])
+                        else:
+                            row["budget_match_relative_error"] = None
                         row.update(_score_item(item, row))
                         out.write(json.dumps(row, ensure_ascii=False) + "\n")
                         out.flush()
@@ -201,6 +333,14 @@ def main(argv=None) -> None:
 
     summary = _summarize(rows)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if budget_profile:
+        budget_path = output_dir / "budget_summary.json"
+        budget_path.write_text(
+            json.dumps(_budget_summary(summary, budget_profile, settings["budget_profile"], budget_profile_digest), indent=2, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"Wrote {budget_path}")
     print(f"Wrote {results_path}")
     print(f"Wrote {summary_path}")
 
@@ -256,6 +396,168 @@ def _read_run_config(path: str) -> dict[str, Any]:
     return data
 
 
+def _load_baseline_settings(path: str | None) -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "random_backtrack": {"minimum_position": 64},
+        "periodic_backtrack": {"minimum_position": 64},
+        "self_correct": {
+            "instruction": "\nWait. Re-check the previous solution carefully. Return the corrected final answer on a line formatted as #### <answer>.\n",
+            "temperature": 0.6,
+            "repetition_penalty": 1.1,
+        },
+    }
+    if not path:
+        return settings
+    loaded = _read_run_config(path)
+    if not isinstance(loaded, dict):
+        raise SystemExit("baseline_config must be a mapping.")
+    for key, value in loaded.items():
+        if isinstance(value, dict) and isinstance(settings.get(key), dict):
+            settings[key] = {**settings[key], **value}
+        else:
+            settings[key] = value
+    return settings
+
+
+def _run_baseline_method(
+    *,
+    method: str,
+    model,
+    tokenizer,
+    prompt: str,
+    max_new_tokens: int,
+    cfg,
+    profile: dict[str, Any],
+    baseline_settings: dict[str, Any],
+    run_seed: int,
+    index: int,
+    effective_precision: str,
+    trace_path: Path,
+    restart_selected: bool,
+    max_decode_events: int | None = None,
+) -> dict[str, Any]:
+    # A strict per-ID table supersedes the generic generation cap: a MGT-B
+    # trajectory that used 20k events may grant a control up to 22k at +10%.
+    total_budget = max(1, int(max_decode_events)) if max_decode_events is not None else int(max_new_tokens)
+    if method in SCHEDULED_BASELINES:
+        template = assigned_template(profile, base_seed=run_seed, precision=effective_precision, index=index)
+        if method == "random_backtrack":
+            schedule = random_schedule(
+                template,
+                seed=stable_int_seed(run_seed, method, "schedule"),
+                minimum_position=int(baseline_settings[method]["minimum_position"]),
+            )
+        else:
+            schedule = periodic_schedule(template, minimum_position=int(baseline_settings[method]["minimum_position"]))
+        payload = generate_scheduled_backtracking(
+            model,
+            tokenizer,
+            prompt,
+            cfg,
+            schedule=schedule,
+            max_new_tokens=total_budget,
+            trace_log_path=trace_path,
+        )
+        payload["trigger_schedule"] = schedule
+        payload["budget_template"] = template
+        return payload
+
+    primary = _run_vanilla(model, tokenizer, prompt, total_budget)
+    primary_tokens = max(0, len(primary.get("tokens", [])) - len(tokenizer(prompt)["input_ids"]))
+    if method == "restart":
+        if not restart_selected:
+            primary.update(
+                {
+                    "interventions": [],
+                    "restart_applied": False,
+                    "primary_tokens_generated": primary_tokens,
+                    "final_tokens_generated": primary_tokens,
+                    "decode_token_events_total": primary_tokens,
+                    "extra_decode_tokens": 0,
+                }
+            )
+            return primary
+        remaining_budget = max(0, total_budget - primary_tokens)
+        if remaining_budget <= 0:
+            primary.update(
+                {
+                    "interventions": [{"type": "restart", "applied": False, "reason": "decode_budget_exhausted"}],
+                    "restart_applied": False,
+                    "primary_tokens_generated": primary_tokens,
+                    "final_tokens_generated": primary_tokens,
+                    "decode_token_events_total": primary_tokens,
+                    "extra_decode_tokens": 0,
+                }
+            )
+            return primary
+        secondary_seed = stable_int_seed(run_seed, "restart", 1)
+        _seed_everything(secondary_seed)
+        restarted = _run_vanilla(model, tokenizer, prompt, remaining_budget)
+        final_tokens = max(0, len(restarted.get("tokens", [])) - len(tokenizer(prompt)["input_ids"]))
+        restarted.update(
+            {
+                "interventions": [{"type": "restart", "applied": True}],
+                "restart_applied": True,
+                "secondary_seed": secondary_seed,
+                "initial_completion_text": _completion_text(tokenizer, primary.get("tokens", []), len(tokenizer(prompt)["input_ids"]), primary.get("text")),
+                "primary_tokens_generated": primary_tokens,
+                "final_tokens_generated": final_tokens,
+                "decode_token_events_total": primary_tokens + final_tokens,
+                "extra_decode_tokens": final_tokens,
+                "restart_completion_text": _completion_text(tokenizer, restarted.get("tokens", []), len(tokenizer(prompt)["input_ids"]), restarted.get("text")),
+            }
+        )
+        return restarted
+
+    if method == "self_correct":
+        settings = baseline_settings["self_correct"]
+        initial_completion = _completion_text(tokenizer, primary.get("tokens", []), len(tokenizer(prompt)["input_ids"]), primary.get("text"))
+        remaining_budget = max(0, total_budget - primary_tokens)
+        if remaining_budget <= 0:
+            primary.update(
+                {
+                    "interventions": [{"type": "self_correct", "applied": False, "reason": "decode_budget_exhausted"}],
+                    "revision_applied": False,
+                    "primary_tokens_generated": primary_tokens,
+                    "final_tokens_generated": primary_tokens,
+                    "decode_token_events_total": primary_tokens,
+                    "extra_decode_tokens": 0,
+                }
+            )
+            return primary
+        revision_prompt = f"{prompt}{initial_completion}{settings['instruction']}"
+        secondary_seed = stable_int_seed(run_seed, "self_correct", 1)
+        _seed_everything(secondary_seed)
+        revision = _run_plain(
+            model,
+            tokenizer,
+            revision_prompt,
+            min(revision_token_budget(profile), remaining_budget),
+            temperature=float(settings["temperature"]),
+            repetition_penalty=float(settings["repetition_penalty"]),
+        )
+        revision_prompt_tokens = len(tokenizer(revision_prompt)["input_ids"])
+        revision_tokens = max(0, len(revision.get("tokens", [])) - revision_prompt_tokens)
+        revision_completion = _completion_text(tokenizer, revision.get("tokens", []), revision_prompt_tokens, revision.get("text"))
+        revision.update(
+            {
+                "interventions": [{"type": "self_correct", "applied": True, "max_tokens": min(revision_token_budget(profile), remaining_budget)}],
+                "revision_applied": True,
+                "secondary_seed": secondary_seed,
+                "initial_completion_text": initial_completion,
+                "revision_text": revision_completion,
+                "completion_text_override": revision_completion,
+                "primary_tokens_generated": primary_tokens,
+                "final_tokens_generated": revision_tokens,
+                "decode_token_events_total": primary_tokens + revision_tokens,
+                "extra_decode_tokens": revision_tokens,
+            }
+        )
+        return revision
+
+    raise ValueError(f"Unsupported baseline method: {method}")
+
+
 def _load_prompts(path: str, limit: int) -> list[dict[str, Any]]:
     rows = []
     with Path(path).open("r", encoding="utf-8") as handle:
@@ -283,7 +585,9 @@ def _load_prompts(path: str, limit: int) -> list[dict[str, Any]]:
 
 def _load_items(settings: dict[str, Any]) -> list[dict[str, Any]]:
     exclusion_paths = settings.get("exclude_ids_from") or []
+    inclusion_paths = settings.get("include_ids_from") or []
     excluded_ids = _load_excluded_ids(exclusion_paths)
+    included_ids = _load_included_ids(inclusion_paths)
     if settings.get("expected_num_excluded") is not None and len(excluded_ids) != int(settings["expected_num_excluded"]):
         raise SystemExit(
             f"Expected {int(settings['expected_num_excluded'])} excluded IDs, found {len(excluded_ids)}. "
@@ -302,7 +606,7 @@ def _load_items(settings: dict[str, Any]) -> list[dict[str, Any]]:
             dataset_name=settings["dataset_name"],
             dataset_config=settings["dataset_config"],
             split=settings["split"],
-            limit=None if excluded_ids else settings["limit"],
+            limit=None if excluded_ids or included_ids else settings["limit"],
             seed=settings["seed"],
             prompt_style=settings["prompt_style"],
         )
@@ -311,14 +615,16 @@ def _load_items(settings: dict[str, Any]) -> list[dict[str, Any]]:
             dataset_name=settings["dataset_name"],
             dataset_config=settings["dataset_config"],
             split=settings["split"],
-            limit=None if excluded_ids else settings["limit"],
+            limit=None if excluded_ids or included_ids else settings["limit"],
             seed=settings["seed"],
             prompt_style=settings["prompt_style"],
         )
     else:
         items = _load_prompts(settings["input"], settings["limit"])
 
-    if excluded_ids:
+    if excluded_ids or included_ids:
+        if included_ids:
+            items = [item for item in items if str(item.get("id")) in included_ids]
         items = [item for item in items if str(item.get("id")) not in excluded_ids]
         if settings["limit"] is not None:
             items = items[: max(int(settings["limit"]), 0)]
@@ -326,10 +632,46 @@ def _load_items(settings: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _load_excluded_ids(paths: str | list[str]) -> set[str]:
+    return _load_ids_from_jsonl(paths, "exclude_ids_from")
+
+
+def _load_included_ids(paths: str | list[str]) -> set[str]:
+    return _load_ids_from_jsonl(paths, "include_ids_from")
+
+
+def _load_run_seed_map(paths: str | list[str], requested_precision: str) -> dict[str, tuple[int, str]]:
     if isinstance(paths, str):
         paths = [paths]
     if not isinstance(paths, list):
-        raise SystemExit("exclude_ids_from must be a JSONL path or a list of JSONL paths.")
+        raise SystemExit("run_seed_from must be a JSONL path or a list of JSONL paths.")
+
+    seeds: dict[str, tuple[int, str]] = {}
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.is_file():
+            raise SystemExit(f"Run-seed source does not exist: {path}")
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise SystemExit(f"Invalid JSON in run-seed source {path}:{line_number}: {exc}") from exc
+                row_precision = row.get("requested_precision", row.get("precision"))
+                if row.get("method") != "vanilla" or row_precision != requested_precision:
+                    continue
+                if row.get("id") is None or row.get("seed") is None:
+                    continue
+                seeds.setdefault(str(row["id"]), (int(row["seed"]), str(path)))
+    return seeds
+
+
+def _load_ids_from_jsonl(paths: str | list[str], setting_name: str) -> set[str]:
+    if isinstance(paths, str):
+        paths = [paths]
+    if not isinstance(paths, list):
+        raise SystemExit(f"{setting_name} must be a JSONL path or a list of JSONL paths.")
 
     excluded: set[str] = set()
     for raw_path in paths:
@@ -355,7 +697,19 @@ def _ids_sha256(ids) -> str:
 
 
 def _validate_mgtb_settings(settings: dict[str, Any]) -> None:
-    if "mgtb_v3_window" not in settings["methods"]:
+    methods = set(settings["methods"])
+    unknown = methods - set(METHODS)
+    if unknown:
+        raise SystemExit(f"Unsupported methods: {sorted(unknown)}")
+    if methods & PROFILE_BASELINES:
+        profile_path = settings.get("budget_profile")
+        if not profile_path or not Path(profile_path).is_file():
+            raise SystemExit("random_backtrack, periodic_backtrack, restart, and self_correct require an existing budget_profile JSON.")
+    if methods & SCHEDULED_BASELINES and not settings.get("config"):
+        raise SystemExit("random_backtrack and periodic_backtrack require config with backtracking settings.")
+    if settings.get("decode_budget_table") and not Path(settings["decode_budget_table"]).is_file():
+        raise SystemExit(f"Per-ID decode budget table not found: {settings['decode_budget_table']}")
+    if "mgtb_v3_window" not in methods:
         return
     if settings.get("calibration") is not None:
         if not isinstance(settings["calibration"], dict):
@@ -538,10 +892,37 @@ def _load_model(model_name: str, precision: str, device_map: str, allow_cpu_fp32
         raise RuntimeError("INT4 bitsandbytes generation requires a visible CUDA GPU/driver.")
     quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
     model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, device_map=device_map)
+    _assert_cuda_only_model(model)
     return model, tokenizer, "int4"
 
 
+def _assert_cuda_only_model(model) -> None:
+    device_map = getattr(model, "hf_device_map", None)
+    if isinstance(device_map, dict) and device_map:
+        bad = {name: device for name, device in device_map.items() if str(device).lower() in {"cpu", "disk"}}
+        if bad:
+            raise RuntimeError(f"INT4 run requires GPU-only placement, but these modules were offloaded: {bad}")
+        has_cuda = any(isinstance(device, int) or str(device).lower().startswith("cuda") for device in device_map.values())
+        if has_cuda:
+            return
+    if str(getattr(model, "device", "")).lower().startswith("cuda"):
+        return
+    raise RuntimeError("INT4 run requires every model module on CUDA; no CUDA placement was detected.")
+
+
 def _run_vanilla(model, tokenizer, prompt: str, max_new_tokens: int) -> dict[str, Any]:
+    return _run_plain(model, tokenizer, prompt, max_new_tokens)
+
+
+def _run_plain(
+    model,
+    tokenizer,
+    prompt: str,
+    max_new_tokens: int,
+    *,
+    temperature: float = 1.0,
+    repetition_penalty: float = 1.0,
+) -> dict[str, Any]:
     import torch
 
     model.eval()
@@ -559,7 +940,12 @@ def _run_vanilla(model, tokenizer, prompt: str, max_new_tokens: int) -> dict[str
                 outputs = model(input_ids=generated[:, -1:], past_key_values=cache, use_cache=True)
         logits = outputs.logits[:, -1, :]
         cache = getattr(outputs, "past_key_values", None)
-        next_token = _sample_token(logits, temperature=1.0, generated_tokens=tokens)
+        next_token = _sample_token(
+            logits,
+            temperature=temperature,
+            generated_tokens=tokens,
+            repetition_penalty=repetition_penalty,
+        )
         token_id = int(next_token.item())
         tokens.append(token_id)
         generated = torch.tensor([tokens], device=model.device)
@@ -581,6 +967,11 @@ def _load_threshold(value: str) -> float:
         data = json.loads(path.read_text(encoding="utf-8"))
         return float(data["threshold"])
     return float(value)
+
+
+def _safe_mean(values) -> float:
+    values = list(values)
+    return sum(values) / len(values) if values else 0.0
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -606,8 +997,39 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "mean_latency": sum(r.get("latency", 0.0) for r in items) / n,
             "mean_alerts": sum(len(r.get("alerts", [])) for r in items) / n,
             "mean_backtracks": sum(len(r.get("backtracks", [])) for r in items) / n,
+            "mean_interventions": sum(len(r.get("interventions", r.get("backtracks", []))) for r in items) / n,
+            "mean_primary_tokens_generated": sum(r.get("primary_tokens_generated", r.get("tokens_generated", 0)) for r in items) / n,
+            "mean_final_tokens_generated": sum(r.get("final_tokens_generated", r.get("tokens_generated", 0)) for r in items) / n,
+            "mean_total_decode_tokens": sum(r.get("decode_token_events_total", r.get("token_events_trace", 0)) for r in items) / n,
+            "mean_extra_decode_tokens": sum(r.get("extra_decode_tokens", r.get("extra_sampled", 0)) for r in items) / n,
+            "mean_budget_match_relative_error": _safe_mean(
+                r.get("budget_match_relative_error") for r in items if r.get("budget_match_relative_error") is not None
+            ),
         }
     return summary
+
+
+def _budget_summary(summary: dict[str, Any], profile: dict[str, Any], profile_path: str, profile_digest: str) -> dict[str, Any]:
+    target = float(profile["summary"]["mean_extra_decode_tokens"])
+    tolerance = 0.05
+    groups: dict[str, Any] = {}
+    for key, values in summary["groups"].items():
+        observed = float(values["mean_extra_decode_tokens"])
+        relative_error = (observed - target) / target if target else None
+        groups[key] = {
+            "mean_extra_decode_tokens": observed,
+            "mean_total_decode_tokens": values["mean_total_decode_tokens"],
+            "mean_latency": values["mean_latency"],
+            "relative_error_to_profile": relative_error,
+            "within_five_percent": abs(relative_error) <= tolerance if relative_error is not None else False,
+        }
+    return {
+        "budget_profile_path": profile_path,
+        "budget_profile_sha256": profile_digest,
+        "target_mean_extra_decode_tokens": target,
+        "tolerance_relative": tolerance,
+        "groups": groups,
+    }
 
 
 if __name__ == "__main__":
