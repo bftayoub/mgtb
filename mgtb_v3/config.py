@@ -35,6 +35,10 @@ class BacktrackingConfig:
     use_no_bad_ngrams: bool = True
     inject_wait_on_backtrack: bool = False
     wait_injection_text: str = "\nWait. Re-check the calculation.\n"
+    suspect_ngram_blocking: bool = True
+    prompt_injection: bool = False
+    cache_state_mode: str = "replay_last"
+    changepoint_index_mode: str = "tracked_windows"
 
 
 @dataclass
@@ -43,8 +47,8 @@ class ScoreConfig:
     w_logprob: float = 0.10
     w_repetition: float = 0.20
     w_confident_loop: float = 0.35
-    w_local_entropy_pos: float = 0.15
-    w_local_entropy_neg: float = 0.05
+    w_local_entropy_pos: float = 0.18
+    w_local_entropy_neg: float = 0.02
 
 
 @dataclass

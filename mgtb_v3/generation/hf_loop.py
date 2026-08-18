@@ -45,6 +45,10 @@ def generate_with_mgtb_v3(
     decode_temperature = 1.0
     repetition_penalty = 1.0
     bad_ngrams: list[tuple[int, ...]] = []
+    sampled_tokens = 0
+    deleted_tokens = 0
+    termination_reason = "max_new_tokens"
+    detector_window_indices: list[int] = []
 
     with TraceLogger(trace_log_path) as logger:
         for _ in range(max_new_tokens):
@@ -63,6 +67,7 @@ def generate_with_mgtb_v3(
                 bad_ngrams=bad_ngrams,
             )
             token_id = int(next_token.item())
+            sampled_tokens += 1
             tokens.append(token_id)
             generated = torch.tensor([tokens], device=model.device)
             monitor.update_token(token_id, logits[0])
@@ -70,6 +75,7 @@ def generate_with_mgtb_v3(
             logger.log_token(stat.position, token_id, stat.entropy, stat.logprob)
 
             if token_id == getattr(tokenizer, "eos_token_id", None):
+                termination_reason = "eos"
                 break
 
             while monitor.should_emit_window():
@@ -77,6 +83,7 @@ def generate_with_mgtb_v3(
                 raw_score = linear_window_score(features, config.score)
                 p_value = calibrator.p_value(raw_score, features.end_pos)
                 update = detector.update(p_value)
+                detector_window_indices.append(features.window_index)
                 window_score = WindowScore(
                     features=features,
                     raw_score=raw_score,
@@ -87,13 +94,16 @@ def generate_with_mgtb_v3(
                 )
                 logger.log_window(window_score)
                 if update["alert"]:
-                    active_prompt_len = monitor.prompt_len
-                    cp_window = detector.changepoint_window()
-                    cp_token = active_prompt_len + cp_window * config.window.stride
+                    active_prompt_len = prompt_len
+                    cp_local_window = detector.changepoint_window()
+                    cp_window = detector_window_indices[cp_local_window]
+                    tracked_by_index = {window.window_index: window for window in monitor.window_features_history}
+                    cp_rel = tracked_by_index[cp_window].start_pos
+                    cp_token = active_prompt_len + cp_rel
                     rollback = max(active_prompt_len, cp_token - config.backtracking.margin_tokens)
                     alert = AlertInfo(
                         window_index=features.window_index,
-                        token_pos=features.end_pos,
+                        token_pos=active_prompt_len + features.end_pos,
                         changepoint_window=cp_window,
                         rollback_token_pos=rollback,
                         score=raw_score,
@@ -104,6 +114,7 @@ def generate_with_mgtb_v3(
                     if do_backtracking:
                         event = backtracker.on_alert(alert, tokens, cache, monitor, detector, active_prompt_len)
                         if event.get("applied"):
+                            deleted_tokens += int(event.get("rollback_span", 0))
                             tokens = event["tokens"]
                             cache = event["cache"]
                             injection_text = str(event.get("wait_injection_text") or "")
@@ -124,11 +135,23 @@ def generate_with_mgtb_v3(
                                 bad_ngrams = [tuple(map(int, ngram)) for ngram in event.get("bad_ngrams", [])]
                             backtracks.append({k: v for k, v in event.items() if k not in {"tokens", "cache"}})
                             logger.log_backtrack(backtracks[-1])
+                            detector_window_indices = []
                     break
 
     text = tokenizer.decode(tokens, skip_special_tokens=True)
-    result = GenerationResult(text=text, tokens=tokens, alerts=alerts, backtracks=backtracks, trace_log_path=str(trace_log_path) if trace_log_path else None)
-    result.latency = time.time() - start_time  # dynamic field for eval convenience
+    result = GenerationResult(
+        text=text,
+        tokens=tokens,
+        alerts=alerts,
+        backtracks=backtracks,
+        trace_log_path=str(trace_log_path) if trace_log_path else None,
+        sampled_tokens=sampled_tokens,
+        emitted_tokens=max(0, len(tokens) - prompt_len),
+        deleted_tokens=deleted_tokens,
+        termination_reason=termination_reason,
+        latency=time.time() - start_time,
+    )
+    result.retained_monitor_windows = [window.to_dict() for window in monitor.window_features_history]
     return result
 
 

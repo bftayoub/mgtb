@@ -1,0 +1,5 @@
+action: build_calibrator
+manifest: outputs/science_fast/splits/manifest.json
+reference_run: outputs/science_fast/features/reference
+calibrator: outputs/science_fast/calibration/calibrator.json
+summary: outputs/science_fast/calibration/reference_summary.json

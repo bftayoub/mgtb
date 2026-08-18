@@ -12,6 +12,19 @@ def crop_hf_cache(cache, max_length: int):
     return cache
 
 
+def replay_last_logits(model, tokens, cache, device=None):
+    """Replay the last retained token on a cache cropped to prefix[:-1]."""
+    import torch
+
+    if not tokens:
+        raise ValueError("cannot replay an empty prefix")
+    device = device or getattr(model, "device", None)
+    input_ids = torch.tensor([[int(tokens[-1])]], device=device)
+    with torch.no_grad():
+        output = model(input_ids=input_ids, past_key_values=cache, use_cache=True)
+    return output.logits[:, -1, :], getattr(output, "past_key_values", None)
+
+
 def _crop_layer(layer, max_length: int):
     if isinstance(layer, tuple):
         return tuple(_crop_tensor(tensor, max_length) for tensor in layer)

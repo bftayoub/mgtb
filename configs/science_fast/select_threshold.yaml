@@ -1,0 +1,5 @@
+action: select_threshold
+manifest: outputs/science_fast/splits/manifest.json
+development_run: outputs/science_fast/features/development
+calibrator: outputs/science_fast/calibration/calibrator.json
+threshold: outputs/science_fast/calibration/threshold.json

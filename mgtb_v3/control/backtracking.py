@@ -12,6 +12,10 @@ class BacktrackingController:
         self.reroll_count = 0
 
     def on_alert(self, alert_info, tokens, cache, monitor, detector, prompt_len: int):
+        if self.config.cache_state_mode != "replay_last":
+            raise ValueError("scientific controller requires cache_state_mode=replay_last")
+        if self.config.changepoint_index_mode != "tracked_windows":
+            raise ValueError("scientific controller requires changepoint_index_mode=tracked_windows")
         if self.reroll_count >= self.config.max_rerolls:
             return {"applied": False, "reason": "max_rerolls_exhausted", "tokens": tokens, "cache": cache}
 
@@ -20,11 +24,15 @@ class BacktrackingController:
         else:
             rollback_pos = max(prompt_len, alert_info.rollback_token_pos)
         rollback_pos = min(rollback_pos, len(tokens))
-        window_start = max(prompt_len, rollback_pos)
-        bad_ngrams = monitor.ngram_tracker.faulty_ngrams(window_start, alert_info.token_pos)
+        generated_rollback_pos = max(0, rollback_pos - prompt_len)
+        generated_alert_pos = max(0, alert_info.token_pos - prompt_len)
+        bad_ngrams = monitor.ngram_tracker.faulty_ngrams(generated_rollback_pos, generated_alert_pos)
         new_tokens = list(tokens[:rollback_pos])
-        new_cache = crop_hf_cache(cache, rollback_pos)
-        monitor.truncate(rollback_pos)
+        # replay_last invariant: cache represents the prefix immediately before
+        # the last retained token; the decode loop replays that token once.
+        new_cache = crop_hf_cache(cache, max(0, rollback_pos - 1))
+        stale_windows = [w.window_index for w in monitor.window_features_history if w.end_pos > generated_rollback_pos]
+        monitor.truncate(generated_rollback_pos)
         detector.reset()
         detector.enter_refractory()
         self.reroll_count += 1
@@ -32,6 +40,10 @@ class BacktrackingController:
             "applied": True,
             "alert": asdict(alert_info) if hasattr(alert_info, "__dataclass_fields__") else dict(alert_info),
             "rollback_pos": rollback_pos,
+            "rollback_span": len(tokens) - rollback_pos,
+            "cache_state_mode": "replay_last",
+            "changepoint_index_mode": "tracked_windows",
+            "invalidated_window_indices": stale_windows,
             "bad_ngrams": bad_ngrams,
             "reroll_index": self.reroll_count,
             "wait_injection_text": self.config.wait_injection_text if self.config.inject_wait_on_backtrack else "",

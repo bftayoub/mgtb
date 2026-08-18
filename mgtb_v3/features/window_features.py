@@ -29,7 +29,9 @@ class TrajectoryMonitor:
     def update_token(self, token_id: int, logits) -> None:
         entropy = entropy_from_logits(logits)
         logprob = chosen_logprob_from_logits(logits, token_id)
-        pos = self.prompt_len + len(self.tokens)
+        # Scientific position buckets are relative to the generated completion,
+        # not to the (tokenizer-dependent) prompt length.
+        pos = len(self.tokens)
         self.tokens.append(int(token_id))
         self.entropies.append(float(entropy))
         self.logprobs.append(float(logprob))
@@ -44,8 +46,8 @@ class TrajectoryMonitor:
             raise ValueError("not enough tokens to emit a new window")
         start_rel = self._next_window_start
         end_rel = start_rel + self.window_config.window_size
-        start_pos = self.prompt_len + start_rel
-        end_pos = self.prompt_len + end_rel
+        start_pos = start_rel
+        end_pos = end_rel
         entropy_window = self.entropies[start_rel:end_rel]
         logprob_window = self.logprobs[start_rel:end_rel]
         mean_entropy = sum(entropy_window) / len(entropy_window)
@@ -70,7 +72,7 @@ class TrajectoryMonitor:
         return features
 
     def truncate(self, pos: int) -> None:
-        keep_count = max(0, min(len(self.tokens), int(pos) - self.prompt_len))
+        keep_count = max(0, min(len(self.tokens), int(pos)))
         self.tokens = self.tokens[:keep_count]
         self.entropies = self.entropies[:keep_count]
         self.logprobs = self.logprobs[:keep_count]

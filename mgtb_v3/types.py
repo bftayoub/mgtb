@@ -65,3 +65,8 @@ class GenerationResult:
     alerts: list[AlertInfo] = field(default_factory=list)
     backtracks: list[dict[str, Any]] = field(default_factory=list)
     trace_log_path: Optional[str] = None
+    sampled_tokens: int = 0
+    emitted_tokens: int = 0
+    deleted_tokens: int = 0
+    termination_reason: str = "unknown"
+    latency: float = 0.0

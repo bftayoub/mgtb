@@ -1,0 +1,2 @@
+action: build_manifest
+manifest: outputs/science_fast/splits/manifest.json

@@ -1,0 +1,5 @@
+action: analyze
+manifest: outputs/science_fast/splits/manifest.json
+vanilla_run: outputs/science_fast/test/vanilla
+mgtb_run: outputs/science_fast/test/mgtb
+analysis_output: outputs/science_fast/analysis/paired_results.json

@@ -1,0 +1,22 @@
+action: run
+protocol_role: test
+method: mgtb
+manifest: outputs/science_fast/splits/manifest.json
+output_dir: outputs/science_fast/test/mgtb
+freeze: outputs/science_fast/freeze/mgtb_int4.lock.json
+calibrator: outputs/science_fast/calibration/calibrator.json
+threshold: outputs/science_fast/calibration/threshold.json
+controller_config: configs/science_fast/controller_v1.yaml
+model:
+  name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+quantization:
+  scheme: bitsandbytes_int4
+  bnb_4bit_quant_type: fp4
+  bnb_4bit_use_double_quant: false
+  bnb_4bit_compute_dtype: float16
+  storage_dtype: uint8
+max_new_tokens: 20000
+prompt_style: math500_cot
+vanilla_temperature: 1.0
+device_map: auto
