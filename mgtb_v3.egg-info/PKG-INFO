@@ -13,6 +13,7 @@ Requires-Dist: pandas
 Requires-Dist: pyyaml
 Requires-Dist: tqdm
 Requires-Dist: matplotlib
+Requires-Dist: bitsandbytes
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Provides-Extra: eval
@@ -21,6 +22,8 @@ Requires-Dist: datasets; extra == "eval"
 # MGT-B v3
 
 MGT-B v3 is a clean MVP for inference-time monitoring of autoregressive reasoning traces, aimed at small and quantized models such as INT4 HuggingFace causal LMs.
+
+The rebuilt prospective 300/100/300 protocol, including atomic resume and test freeze, is documented in [`docs/SCIENCE_FAST_RUNBOOK.md`](docs/SCIENCE_FAST_RUNBOOK.md).
 
 The controller does not fine-tune the language model. It monitors generated tokens, aggregates robust degeneration features over windows, detects suspicious regime changes, and can backtrack to a likely changepoint before re-decoding with targeted anti-degeneration constraints.
 
@@ -134,6 +137,18 @@ python scripts/run_precision_comparison.py \
 
 GSM8K configs use `dataset: gsm8k` instead of `input`, with `dataset_name`, `dataset_config`, `split`, and `prompt_style` controlling the HuggingFace dataset source and prompt template.
 
+MATH-500 uses the same config-first path:
+
+```bash
+python scripts/calibrate_precision.py \
+  --config configs/calibration/math500_n100.yaml
+
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/math500_fp16_int4.yaml
+```
+
+MATH-500 configs use `dataset: math500`, defaulting to `dataset_name: HuggingFaceH4/MATH-500`, `dataset_config: default`, `split: test`, and `prompt_style: math500_cot`. The scorer compares normalized final answers after the `####` marker and handles common LaTeX forms such as `\boxed{...}`, `\frac{...}{...}`, `\sqrt{...}`, and `\text{...}`; it is exact-normalized scoring, not a full symbolic-equivalence prover.
+
 CLI arguments override the config file, for example:
 
 ```bash
@@ -142,3 +157,34 @@ python scripts/run_precision_comparison.py \
   --limit 10 \
   --output-dir outputs/debug_10
 ```
+
+### Compute-matched priority-1 controls
+
+The precision runner also supports six config-selectable methods:
+
+```yaml
+methods:
+  - vanilla
+  - mgtb_v3_window
+  - random_backtrack
+  - periodic_backtrack
+  - restart
+  - self_correct
+```
+
+The four controls use a frozen budget profile built from paired development runs, not from labels. Build the included MATH-500 INT4 profile once from the existing `log_threshold=10` artifacts:
+
+```bash
+python scripts/build_baseline_budget.py \
+  --manifest configs/budgets/math500_int4_logthr10_sources.yaml \
+  --output outputs/budgets/math500_int4_logthr10.json
+```
+
+Then run the all-method example:
+
+```bash
+python scripts/run_precision_comparison.py \
+  --run-config configs/tests/math500_priority1_int4.yaml
+```
+
+`random_backtrack` and `periodic_backtrack` preserve the empirical intervention and rollback budget while changing intervention positions. `restart` performs a deterministic, budget-matched subset of full second attempts. `self_correct` asks every answer for a short revision using the profile's mean extra-token budget. Results record the profile hash, intervention details, extra decode tokens, total decode events, and budget-match error.

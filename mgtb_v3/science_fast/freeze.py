@@ -21,6 +21,7 @@ def build_freeze(
         "test_items": [{"item_id": i["item_id"], "content_sha256": i["content_sha256"]} for i in manifest["roles"]["test"]],
         "model": resolved_config["model"],
         "quantization": resolved_config["quantization"],
+        "device_map": resolved_config["device_map"],
         "dataset_revisions": manifest["dataset_revisions"],
         "protocol_seed": manifest["protocol_seed"],
         "seed_strategy": manifest["seed_strategy"],

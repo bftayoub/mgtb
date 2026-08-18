@@ -26,7 +26,7 @@ def test_freeze_covers_test_ids_and_detects_mutation(tmp_path):
     threshold = {"selected_h": 3.0, "threshold_sha256": "threshold"}
     calibrator = {"calibrator_sha256": "calibrator"}
     config = {"model": {"name": "m", "revision": "r"}, "quantization": {"scheme": "int4"},
-              "controller": {"cache_state_mode": "replay_last"}, "max_new_tokens": 20000}
+              "device_map": {"": 0}, "controller": {"cache_state_mode": "replay_last"}, "max_new_tokens": 20000}
     freeze = build_freeze(manifest=manifest, resolved_config=config, calibrator=calibrator, threshold=threshold,
                           method="vanilla", source={"git": "x"}, environment={"python": "x"}, scorer_path=scorer)
     validate_freeze(freeze, manifest=manifest, method="vanilla")

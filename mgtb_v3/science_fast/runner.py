@@ -31,6 +31,11 @@ def seed_everything(seed: int) -> None:
 
 def load_int4_model(settings: dict[str, Any]):
     import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("science_fast INT4 requires a CUDA-visible GPU; refusing CPU/offload execution")
+    device_map = settings.get("device_map")
+    if device_map != {"": 0}:
+        raise ValueError("science_fast requires device_map={'': 0}; device_map='auto' can CPU/disk-offload")
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     model_cfg = settings["model"]
     quant = settings["quantization"]
@@ -43,8 +48,11 @@ def load_int4_model(settings: dict[str, Any]):
     )
     tokenizer = AutoTokenizer.from_pretrained(model_cfg["name"], revision=model_cfg["revision"])
     model = AutoModelForCausalLM.from_pretrained(
-        model_cfg["name"], revision=model_cfg["revision"], quantization_config=bnb, device_map=settings.get("device_map", "auto")
+        model_cfg["name"], revision=model_cfg["revision"], quantization_config=bnb, device_map=device_map
     )
+    assigned = set(getattr(model, "hf_device_map", {}).values())
+    if assigned and any(device not in {0, "cuda:0", torch.device("cuda:0")} for device in assigned):
+        raise RuntimeError(f"refusing offloaded model placement: {getattr(model, 'hf_device_map', {})}")
     return model, tokenizer
 
 
@@ -74,6 +82,8 @@ def validate_fast_spec(settings: dict[str, Any]) -> None:
         raise ValueError("science_fast requires math500_cot and max_new_tokens=20000")
     if float(settings.get("vanilla_temperature", -1)) != 1.0:
         raise ValueError("science_fast requires vanilla_temperature=1.0")
+    if settings.get("device_map") != {"": 0}:
+        raise ValueError("science_fast requires device_map={'': 0}; automatic CPU/disk offload is forbidden")
     controller = settings["controller"]
     required = {
         ("window", "window_size"): 64, ("window", "stride"): 32, ("window", "ngram_min"): 6, ("window", "ngram_max"): 8,
@@ -180,6 +190,8 @@ def _assert_runtime_matches_freeze(settings, freeze, calibrator_payload, selecte
         raise ValueError("runtime model does not match freeze")
     if settings.get("quantization") != freeze.get("quantization"):
         raise ValueError("runtime quantization does not match freeze")
+    if settings.get("device_map") != freeze.get("device_map"):
+        raise ValueError("runtime device map does not match freeze")
     if settings.get("controller") != freeze.get("resolved_controller_config"):
         raise ValueError("runtime controller does not match freeze")
     if int(settings.get("max_new_tokens", -1)) != int(freeze.get("max_new_tokens", -2)):

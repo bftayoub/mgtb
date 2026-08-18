@@ -19,4 +19,5 @@ quantization:
 max_new_tokens: 20000
 prompt_style: math500_cot
 vanilla_temperature: 1.0
-device_map: auto
+device_map:
+  "": 0

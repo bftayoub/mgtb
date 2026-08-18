@@ -7,6 +7,7 @@ pandas
 pyyaml
 tqdm
 matplotlib
+bitsandbytes
 
 [dev]
 pytest
