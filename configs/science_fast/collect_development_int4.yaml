@@ -3,6 +3,7 @@ protocol_role: development
 method: vanilla
 manifest: outputs/science_fast/splits/manifest.json
 output_dir: outputs/science_fast/features/development
+parallel_workers: 4
 controller_config: configs/science_fast/controller_v1.yaml
 model:
   name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B

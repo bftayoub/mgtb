@@ -28,6 +28,7 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Leakage-safe resumable MGT-B scientific pipeline")
     parser.add_argument("--config", required=True)
     parser.add_argument("--stop-after", type=int, help="test/debug interruption after N newly completed items")
+    parser.add_argument("--workers", type=int, help="override the number of parallel GPU generation workers")
     args = parser.parse_args(argv)
     with Path(args.config).open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -47,12 +48,14 @@ def main(argv=None) -> None:
         calibrator = load_calibrator(raw["calibrator"]) if raw.get("calibrator") else None
         threshold = load_threshold(raw["threshold"]) if raw.get("threshold") else None
         freeze = load_freeze(raw["freeze"], manifest=manifest, method=method) if role == "test" else None
+        parallel_workers = args.workers if args.workers is not None else int(raw.get("parallel_workers", 1))
         artifacts = run_role(
             settings=settings, manifest=manifest, role=role, method=method, output_dir=raw["output_dir"],
             calibrator_payload=calibrator, selected_h=threshold.get("selected_h") if threshold else None,
-            freeze=freeze, stop_after=args.stop_after,
+            freeze=freeze, stop_after=args.stop_after, parallel_workers=parallel_workers,
         )
-        _print({"role": role, "method": method, "completed": len(artifacts), "target": len(manifest["roles"][role])})
+        _print({"role": role, "method": method, "completed": len(artifacts),
+                "target": len(manifest["roles"][role]), "parallel_workers": parallel_workers})
         return
 
 

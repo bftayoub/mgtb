@@ -31,8 +31,16 @@ python -m pip install --upgrade "huggingface-hub>=0.34,<1.0" "transformers>=4.47
 python -c "import torch, transformers; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0), transformers.__version__)"
 ```
 
-All scientific configs pin `device_map: {"": 0}`. This deliberately fails on
-insufficient VRAM instead of silently offloading modules to CPU or disk.
+New scientific configs pin `device_map: {"": 0}`. The resumed reference run
+retains its identity-compatible legacy `device_map: auto`, but the loader
+inspects the resolved `hf_device_map` and fails if any layer is on CPU/disk or
+if CUDA-only placement cannot be verified.
+Generation configs use four spawned workers on GPU 0. Each worker owns one
+INT4 model replica and processes one problem at a time; only the parent process
+writes final artifacts and `run_state.json`. `parallel_workers` is an
+orchestration setting, so changing it (or using `--workers N`) does not alter
+the run identity, item seeds, or resume compatibility. Reduce the worker count
+if model loading reports CUDA OOM.
 
 Run only the 300-item reference phase and build its ECDF/summary:
 
@@ -41,7 +49,7 @@ python scripts/run_scientific_experiment.py --config configs/science_fast/collec
 python scripts/run_scientific_experiment.py --config configs/science_fast/build_calibrator.yaml
 ```
 
-Running either command again resumes safely. `--stop-after N` is available for an intentional resume check; it limits newly completed items and does not alter their seeds.
+Running either command again resumes safely. `--stop-after N` is available for an intentional resume check; it limits newly completed items and does not alter their seeds. `--workers N` overrides the configured concurrency for one invocation.
 
 After reviewing `outputs/science_fast/calibration/reference_summary.json`, run development:
 

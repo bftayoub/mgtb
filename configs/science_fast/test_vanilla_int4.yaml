@@ -3,6 +3,7 @@ protocol_role: test
 method: vanilla
 manifest: outputs/science_fast/splits/manifest.json
 output_dir: outputs/science_fast/test/vanilla
+parallel_workers: 4
 freeze: outputs/science_fast/freeze/vanilla_int4.lock.json
 controller_config: configs/science_fast/controller_v1.yaml
 model:

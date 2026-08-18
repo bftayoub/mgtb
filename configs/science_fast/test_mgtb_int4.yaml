@@ -3,6 +3,7 @@ protocol_role: test
 method: mgtb
 manifest: outputs/science_fast/splits/manifest.json
 output_dir: outputs/science_fast/test/mgtb
+parallel_workers: 4
 freeze: outputs/science_fast/freeze/mgtb_int4.lock.json
 calibrator: outputs/science_fast/calibration/calibrator.json
 threshold: outputs/science_fast/calibration/threshold.json

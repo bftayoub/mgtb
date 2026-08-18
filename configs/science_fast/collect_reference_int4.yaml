@@ -3,6 +3,7 @@ protocol_role: reference
 method: vanilla
 manifest: outputs/science_fast/splits/manifest.json
 output_dir: outputs/science_fast/features/reference
+parallel_workers: 4
 controller_config: configs/science_fast/controller_v1.yaml
 model:
   name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
@@ -16,5 +17,6 @@ quantization:
 prompt_style: math500_cot
 max_new_tokens: 20000
 vanilla_temperature: 1.0
-device_map:
-  "": 0
+# Compatibility with the 92 completed artifacts from the original run.
+# The loader verifies hf_device_map after loading and rejects any CPU/disk layer.
+device_map: auto
