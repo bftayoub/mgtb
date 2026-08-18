@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -6,7 +7,8 @@ from mgtb_v3.science_fast.analysis import paired_analysis
 from mgtb_v3.science_fast.freeze import build_freeze, validate_freeze
 from mgtb_v3.science_fast.io import sha256_json
 from mgtb_v3.science_fast.protocol import build_manifest
-from mgtb_v3.science_fast.runner import run_role
+from mgtb_v3.science_fast.provenance import git_commit, source_tree_sha256
+from mgtb_v3.science_fast.runner import _assert_runtime_matches_freeze, run_role
 
 
 def _rows(prefix, count):
@@ -34,6 +36,27 @@ def test_freeze_covers_test_ids_and_detects_mutation(tmp_path):
     broken["test_items"][0]["content_sha256"] = "bad"
     with pytest.raises(ValueError, match="hash mismatch"):
         validate_freeze(broken, manifest=manifest, method="vanilla")
+
+
+def test_runtime_controller_matches_json_round_tripped_freeze():
+    settings = {
+        "model": {"name": "m", "revision": "r"},
+        "quantization": {"scheme": "int4"},
+        "device_map": {"": 0},
+        "controller": {"detector": {"betting_gammas": (0.1, 0.3)}},
+        "max_new_tokens": 20000,
+    }
+    freeze = {
+        "model": settings["model"],
+        "quantization": settings["quantization"],
+        "device_map": settings["device_map"],
+        "resolved_controller_config": settings["controller"],
+        "max_new_tokens": settings["max_new_tokens"],
+        "source": {"git_commit": git_commit(), "source_tree_sha256": source_tree_sha256()},
+    }
+    reloaded_freeze = json.loads(json.dumps(freeze))
+
+    _assert_runtime_matches_freeze(settings, reloaded_freeze, None, None)
 
 
 def _result(item_id, correct, alarms=0, sampled=10, emitted=10, deleted=0):

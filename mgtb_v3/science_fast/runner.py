@@ -291,7 +291,10 @@ def _assert_runtime_matches_freeze(settings, freeze, calibrator_payload, selecte
         raise ValueError("runtime quantization does not match freeze")
     if settings.get("device_map") != freeze.get("device_map"):
         raise ValueError("runtime device map does not match freeze")
-    if settings.get("controller") != freeze.get("resolved_controller_config"):
+    # The resolved dataclass keeps betting_gammas as a tuple, while the freeze
+    # lock necessarily reloads it as a JSON list. Compare their canonical JSON
+    # representations so equivalent serialized controller configs still match.
+    if sha256_json(settings.get("controller")) != sha256_json(freeze.get("resolved_controller_config")):
         raise ValueError("runtime controller does not match freeze")
     if int(settings.get("max_new_tokens", -1)) != int(freeze.get("max_new_tokens", -2)):
         raise ValueError("runtime token budget does not match freeze")
