@@ -12,7 +12,7 @@ from mgtb_v3.generation.hf_loop import generate_with_mgtb_v3
 from mgtb_v3.science_campaign.analysis import campaign_analysis
 from mgtb_v3.science_campaign.calibration import build_calibrator, select_threshold
 from mgtb_v3.science_campaign.config import calibration_spec, load_campaign, resolve_variant
-from mgtb_v3.science_campaign.manifest import assert_independent_test, build_manifest, save_manifest
+from mgtb_v3.science_campaign.manifest import assert_independent_test, build_manifest, derive_manifest, save_manifest
 from mgtb_v3.science_campaign import runner
 
 
@@ -124,6 +124,26 @@ def test_generic_manifest_is_disjoint_and_confirmatory_exclusion_detects_reuse(t
     save_manifest(old, manifest)
     with pytest.raises(ValueError, match="reuses"):
         assert_independent_test(manifest, [old])
+
+
+def test_derived_manifest_expands_test_without_changing_existing_selection(tmp_path):
+    source = tmp_path / "rows.jsonl"
+    source.write_text("".join(
+        json.dumps({"id": i, "problem": f"q{i}", "answer": str(i)}) + "\n"
+        for i in range(12)
+    ), encoding="utf-8")
+    common = {"jsonl": str(source), "count": 2,
+              "fields": {"problem": "problem", "answer": "answer", "id": "id"}}
+    base = build_manifest({"protocol_seed": 9, "roles": {
+        "reference": common, "development": common, "test": common,
+    }})
+    derived = derive_manifest(base, {
+        "role": "test", "source": {**common, "count": 8},
+    })
+    assert derived["roles"]["reference"] == base["roles"]["reference"]
+    assert derived["roles"]["development"] == base["roles"]["development"]
+    assert derived["roles"]["test"][:2] == base["roles"]["test"]
+    assert derived["counts"] == {"reference": 2, "development": 2, "test": 8}
 
 
 def _analysis_row(item, variant, correct, seed=0):

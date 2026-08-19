@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import hashlib
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from mgtb_v3.science_fast.io import atomic_write_json, load_json, sha256_json
-from mgtb_v3.science_fast.protocol import content_sha256, normalize_problem, selection_key
+from mgtb_v3.science_fast.protocol import content_sha256, item_seed, normalize_problem, selection_key
 
 
 def _load_source(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -35,6 +35,36 @@ def _value(row: dict[str, Any], key: str | None, fallback: str = "") -> Any:
     return row.get(key, fallback) if key else fallback
 
 
+def _source_candidates(role: str, source: dict[str, Any], seed: int) -> list[dict[str, Any]]:
+    rows = _load_source(source)
+    fields = source.get("fields", {})
+    candidates = []
+    for index, row in enumerate(rows):
+        problem = str(_value(row, fields.get("problem", "problem")))
+        if not problem:
+            continue
+        digest = content_sha256(problem)
+        source_id = str(_value(row, fields.get("id"), f"{role}:{index}"))
+        item_id = f"{source.get('name', source.get('jsonl', 'jsonl'))}:{source_id}:{digest[:16]}"
+        candidate = {
+            "role": role, "item_id": item_id, "source_id": source_id,
+            "dataset_name": source.get("name", "jsonl"), "dataset_revision": source.get("revision"),
+            "split": source.get("split", role),
+            "problem": problem,
+            "reference_answer": str(_value(row, fields.get("answer", "answer"))),
+            "subject": _value(row, fields.get("subject"), None),
+            "level": _value(row, fields.get("level"), None),
+            "content_sha256": digest,
+            "selection_key": selection_key(digest, seed),
+            "item_seed": item_seed(seed, item_id),
+        }
+        if source.get("dataset_kind"):
+            candidate["dataset_kind"] = source["dataset_kind"]
+        candidates.append(candidate)
+    unique = {row["content_sha256"]: row for row in candidates}
+    return sorted(unique.values(), key=lambda row: (row["selection_key"], row["item_id"]))
+
+
 def build_manifest(spec: dict[str, Any]) -> dict[str, Any]:
     seed = int(spec["protocol_seed"])
     roles: dict[str, list[dict[str, Any]]] = {}
@@ -42,29 +72,7 @@ def build_manifest(spec: dict[str, Any]) -> dict[str, Any]:
     seen_content: set[str] = set()
     for role in ("reference", "development", "test"):
         source = spec["roles"][role]
-        rows = _load_source(source)
-        fields = source.get("fields", {})
-        candidates = []
-        for index, row in enumerate(rows):
-            problem = str(_value(row, fields.get("problem", "problem")))
-            if not problem:
-                continue
-            digest = content_sha256(problem)
-            source_id = str(_value(row, fields.get("id"), f"{role}:{index}"))
-            item_id = f"{source.get('name', source.get('jsonl', 'jsonl'))}:{source_id}:{digest[:16]}"
-            candidates.append({
-                "role": role, "item_id": item_id, "source_id": source_id,
-                "dataset_name": source.get("name", "jsonl"), "dataset_revision": source.get("revision"),
-                "split": source.get("split", role), "dataset_kind": source.get("dataset_kind", "math500"),
-                "problem": problem,
-                "reference_answer": str(_value(row, fields.get("answer", "answer"))),
-                "subject": _value(row, fields.get("subject"), None),
-                "level": _value(row, fields.get("level"), None),
-                "content_sha256": digest,
-                "selection_key": hashlib.sha256(f"{seed}|{digest}".encode()).hexdigest(),
-            })
-        unique = {row["content_sha256"]: row for row in candidates}
-        selected = sorted(unique.values(), key=lambda row: (row["selection_key"], row["item_id"]))
+        selected = _source_candidates(role, source, seed)
         count = int(source["count"])
         selected = [row for row in selected if row["content_sha256"] not in seen_content][:count]
         if len(selected) != count:
@@ -78,6 +86,42 @@ def build_manifest(spec: dict[str, Any]) -> dict[str, Any]:
         "dataset_revisions": revisions, "roles": roles,
         "counts": {role: len(items) for role, items in roles.items()},
     }
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    validate_manifest(manifest)
+    return manifest
+
+
+def derive_manifest(base: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
+    """Expand one role while proving that the existing selection is unchanged."""
+    validate_manifest(base)
+    role = str(spec["role"])
+    if role not in base["roles"]:
+        raise ValueError(f"cannot derive unknown manifest role {role!r}")
+    source = spec["source"]
+    count = int(source["count"])
+    existing = base["roles"][role]
+    if count < len(existing):
+        raise ValueError(f"derived {role} count cannot shrink {len(existing)} to {count}")
+
+    excluded = {
+        item["content_sha256"]
+        for other_role, items in base["roles"].items()
+        if other_role != role
+        for item in items
+    }
+    selected = [
+        row for row in _source_candidates(role, source, int(base["protocol_seed"]))
+        if row["content_sha256"] not in excluded
+    ][:count]
+    if len(selected) != count:
+        raise ValueError(f"role {role} has only {len(selected)}/{count} unique non-overlapping items")
+    if selected[:len(existing)] != existing:
+        raise ValueError(f"derived {role} does not preserve the existing deterministic selection")
+
+    manifest = deepcopy(base)
+    manifest["roles"][role] = selected
+    manifest["counts"] = {name: len(items) for name, items in manifest["roles"].items()}
+    manifest.pop("manifest_sha256", None)
     manifest["manifest_sha256"] = sha256_json(manifest)
     validate_manifest(manifest)
     return manifest

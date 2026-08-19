@@ -14,7 +14,7 @@ from mgtb_v3.science_campaign.analysis import campaign_analysis
 from mgtb_v3.science_campaign.calibration import build_calibrator, select_threshold
 from mgtb_v3.science_campaign.config import calibration_spec, load_campaign, manifest_path, output_root
 from mgtb_v3.science_campaign.manifest import (
-    assert_independent_test, build_manifest, load_manifest, save_manifest,
+    assert_independent_test, build_manifest, derive_manifest, load_manifest, save_manifest,
 )
 from mgtb_v3.science_campaign.runner import (
     build_freeze, build_profile, campaign_units, collect_features, run_variant,
@@ -75,9 +75,13 @@ def main(argv=None):
     campaign = load_campaign(args.config)
     root = output_root(campaign)
     if args.action == "build-manifest":
-        if not campaign.get("manifest_build"):
-            raise ValueError("campaign has no manifest_build section")
-        manifest = build_manifest(campaign["manifest_build"])
+        if campaign.get("manifest_build"):
+            manifest = build_manifest(campaign["manifest_build"])
+        elif campaign.get("manifest_derive"):
+            derive = campaign["manifest_derive"]
+            manifest = derive_manifest(load_manifest(derive["base_manifest"]), derive)
+        else:
+            raise ValueError("campaign has no manifest_build or manifest_derive section")
         destination = manifest_path(campaign)
         save_manifest(destination, manifest)
         print(json.dumps({"manifest": str(destination), "counts": manifest["counts"],

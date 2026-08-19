@@ -105,6 +105,8 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
             raise ValueError(f"campaign requires {key}")
     if campaign.get("experimental_status") not in {"confirmatory", "exploratory"}:
         raise ValueError("experimental_status must be confirmatory or exploratory")
+    if campaign.get("manifest_build") and campaign.get("manifest_derive"):
+        raise ValueError("campaign cannot define both manifest_build and manifest_derive")
     if campaign["experimental_status"] == "confirmatory" and not campaign.get("exclude_manifests"):
         raise ValueError("confirmatory campaigns require exclude_manifests to prove test independence")
     revision = campaign.get("model", {}).get("revision")
