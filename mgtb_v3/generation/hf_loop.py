@@ -21,6 +21,8 @@ def generate_with_mgtb_v3(
     max_new_tokens: int = 256,
     trace_log_path: str | Path | None = None,
     do_backtracking: bool = True,
+    detector_accumulation: str = "cusum_reset",
+    forced_alert_schedule: list[dict] | None = None,
 ):
     import torch
 
@@ -37,6 +39,7 @@ def generate_with_mgtb_v3(
         gammas=config.detector.betting_gammas,
         p_clip=config.detector.p_clip,
         refractory_windows=config.detector.refractory_windows,
+        accumulation_mode=detector_accumulation,
     )
     backtracker = BacktrackingController(config)
     alerts: list[AlertInfo] = []
@@ -49,6 +52,12 @@ def generate_with_mgtb_v3(
     deleted_tokens = 0
     termination_reason = "max_new_tokens"
     detector_window_indices: list[int] = []
+    forced_alert_mode = forced_alert_schedule is not None
+    forced_alert_schedule = sorted(
+        [dict(event) for event in (forced_alert_schedule or [])],
+        key=lambda event: int(event["trigger_at"]),
+    )
+    next_forced_alert = 0
 
     with TraceLogger(trace_log_path) as logger:
         for _ in range(max_new_tokens):
@@ -83,6 +92,13 @@ def generate_with_mgtb_v3(
                 raw_score = linear_window_score(features, config.score)
                 p_value = calibrator.p_value(raw_score, features.end_pos)
                 update = detector.update(p_value)
+                forced_event = None
+                if next_forced_alert < len(forced_alert_schedule):
+                    candidate = forced_alert_schedule[next_forced_alert]
+                    if int(features.end_pos) >= int(candidate["trigger_at"]):
+                        forced_event = candidate
+                        next_forced_alert += 1
+                effective_alert = forced_event is not None if forced_alert_mode else bool(update["alert"])
                 detector_window_indices.append(features.window_index)
                 window_score = WindowScore(
                     features=features,
@@ -90,17 +106,24 @@ def generate_with_mgtb_v3(
                     p_value=p_value,
                     e_value=update["e_value"],
                     logE=update["logE"],
-                    alert=update["alert"],
+                    alert=effective_alert,
                 )
                 logger.log_window(window_score)
-                if update["alert"]:
+                if effective_alert:
                     active_prompt_len = prompt_len
-                    cp_local_window = detector.changepoint_window()
-                    cp_window = detector_window_indices[cp_local_window]
-                    tracked_by_index = {window.window_index: window for window in monitor.window_features_history}
-                    cp_rel = tracked_by_index[cp_window].start_pos
-                    cp_token = active_prompt_len + cp_rel
-                    rollback = max(active_prompt_len, cp_token - config.backtracking.margin_tokens)
+                    if forced_event is None:
+                        cp_local_window = detector.changepoint_window()
+                        cp_window = detector_window_indices[cp_local_window]
+                        tracked_by_index = {window.window_index: window for window in monitor.window_features_history}
+                        cp_rel = tracked_by_index[cp_window].start_pos
+                        cp_token = active_prompt_len + cp_rel
+                        rollback = max(active_prompt_len, cp_token - config.backtracking.margin_tokens)
+                    else:
+                        cp_window = features.window_index
+                        rollback = max(
+                            active_prompt_len,
+                            active_prompt_len + features.end_pos - max(1, int(forced_event["rollback_tokens"])),
+                        )
                     alert = AlertInfo(
                         window_index=features.window_index,
                         token_pos=active_prompt_len + features.end_pos,
@@ -134,6 +157,9 @@ def generate_with_mgtb_v3(
                             if overrides.get("use_no_bad_ngrams", False):
                                 bad_ngrams = [tuple(map(int, ngram)) for ngram in event.get("bad_ngrams", [])]
                             backtracks.append({k: v for k, v in event.items() if k not in {"tokens", "cache"}})
+                            if forced_event is not None:
+                                backtracks[-1]["trigger_source"] = "forced_schedule"
+                                backtracks[-1]["scheduled_event"] = forced_event
                             logger.log_backtrack(backtracks[-1])
                             detector_window_indices = []
                     break

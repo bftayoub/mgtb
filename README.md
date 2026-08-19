@@ -4,6 +4,8 @@ MGT-B v3 is a clean MVP for inference-time monitoring of autoregressive reasonin
 
 The rebuilt prospective 300/100/300 protocol, including atomic resume and test freeze, is documented in [`docs/SCIENCE_FAST_RUNBOOK.md`](docs/SCIENCE_FAST_RUNBOOK.md).
 
+New multi-seed ablation and generalization campaigns use the separate, config-driven runner documented in [`docs/SCIENCE_CAMPAIGN_RUNBOOK.md`](docs/SCIENCE_CAMPAIGN_RUNBOOK.md). It preserves the historical `science_fast` result while adding per-unit checkpoints, live progress logs, method-specific calibration, campaign freeze and multi-method paired analysis.
+
 The controller does not fine-tune the language model. It monitors generated tokens, aggregates robust degeneration features over windows, detects suspicious regime changes, and can backtrack to a likely changepoint before re-decoding with targeted anti-degeneration constraints.
 
 Important: this project does not claim an exact Ville guarantee. LLM scores are dependent, windows overlap, and p-values are not conditionally valid by construction. The CUSUM-e / e-detector form is a design motivation; the operational threshold is calibrated empirically on held-out healthy traces.

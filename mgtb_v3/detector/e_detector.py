@@ -12,6 +12,7 @@ class EDetector:
         gammas=(0.1, 0.3, 0.5, 0.7),
         p_clip: float = 1e-6,
         refractory_windows: int = 0,
+        accumulation_mode: str = "cusum_reset",
     ):
         if threshold <= 0:
             raise ValueError("threshold must be positive")
@@ -20,6 +21,9 @@ class EDetector:
         self.gammas = tuple(float(g) for g in gammas)
         self.p_clip = float(p_clip)
         self.refractory_windows = int(refractory_windows)
+        if accumulation_mode not in {"cusum_reset", "no_reset"}:
+            raise ValueError("accumulation_mode must be 'cusum_reset' or 'no_reset'")
+        self.accumulation_mode = accumulation_mode
         self._refractory_remaining = 0
         self.reset()
 
@@ -40,7 +44,10 @@ class EDetector:
             }
 
         loge = log_mixture_betting(p_value, self.gammas, p_clip=self.p_clip)
-        self.logE = max(0.0, self.logE) + loge
+        if self.accumulation_mode == "cusum_reset":
+            self.logE = max(0.0, self.logE) + loge
+        else:
+            self.logE = self.logE + loge
         e_value = math.exp(loge)
         alert = self.logE >= self.log_threshold
         self.p_history.append(float(p_value))

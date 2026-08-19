@@ -1,0 +1,134 @@
+schema_version: 1
+campaign_id: math500_existing_test_exploratory_v1
+experimental_status: exploratory
+manifest: outputs/science_fast/splits/manifest.json
+output_root: outputs/science_campaign/math500_exploratory_v1
+controller_base: configs/science_fast/controller_v1.yaml
+parallel_workers: 4
+seeds: [0, 1, 2]
+
+model:
+  name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+  precision: int4
+  device_map: {"": 0}
+  quantization:
+    quant_type: fp4
+    double_quant: false
+    compute_dtype: float16
+
+generation:
+  dataset_kind: math500
+  prompt_style: math500_cot
+  max_new_tokens: 20000
+
+# All 64/32-window calibrations reuse the same raw Vanilla features. Only the
+# token-level previous-controller comparison needs a second feature campaign.
+calibrations:
+  full:
+    calibration_mode: positional
+    accumulation_mode: cusum_reset
+  entropy_only:
+    feature_source: full
+    controller_overrides:
+      score: {w_entropy: 1.0, w_logprob: 0.0, w_repetition: 0.0, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  repetition_only:
+    feature_source: full
+    controller_overrides:
+      score: {w_entropy: 0.0, w_logprob: 0.0, w_repetition: 1.0, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  entropy_repetition:
+    feature_source: full
+    controller_overrides:
+      score: {w_entropy: 0.5, w_logprob: 0.0, w_repetition: 0.5, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  global:
+    feature_source: full
+    calibration_mode: global
+  no_reset:
+    feature_source: full
+    accumulation_mode: no_reset
+  token_level_previous:
+    controller_overrides:
+      window: {window_size: 1, stride: 1}
+
+variants:
+  vanilla:
+    kind: vanilla
+  full_mgtb:
+    kind: controller
+    calibration: full
+    repair_group: full
+  previous_token_controller_proxy:
+    kind: controller
+    calibration: token_level_previous
+    controller_overrides:
+      window: {window_size: 1, stride: 1}
+  matched_random:
+    kind: matched_random
+    profile: outputs/science_campaign/math500_exploratory_v1/profiles/full_mgtb.json
+    minimum_position: 64
+    repair_group: full
+  monitor_entropy_only:
+    kind: controller
+    calibration: entropy_only
+    controller_overrides:
+      score: {w_entropy: 1.0, w_logprob: 0.0, w_repetition: 0.0, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  monitor_repetition_only:
+    kind: controller
+    calibration: repetition_only
+    controller_overrides:
+      score: {w_entropy: 0.0, w_logprob: 0.0, w_repetition: 1.0, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  monitor_entropy_repetition:
+    kind: controller
+    calibration: entropy_repetition
+    controller_overrides:
+      score: {w_entropy: 0.5, w_logprob: 0.0, w_repetition: 0.5, w_confident_loop: 0.0, w_local_entropy_pos: 0.0, w_local_entropy_neg: 0.0}
+  monitor_global_calibration:
+    kind: controller
+    calibration: global
+  monitor_no_reset:
+    kind: controller
+    calibration: no_reset
+    accumulation_mode: no_reset
+  repair_fixed_rollback:
+    kind: controller
+    calibration: full
+    repair_group: fixed
+    controller_overrides:
+      backtracking: {use_adaptive_changepoint: false, fixed_rollback_tokens: 1024}
+  repair_rollback_only:
+    kind: controller
+    calibration: full
+    repair_group: rollback_only
+    controller_overrides:
+      backtracking: {redecode_temperature: 1.0, repetition_penalty: 1.0, use_no_bad_ngrams: false, suspect_ngram_blocking: false}
+  repair_temperature:
+    kind: controller
+    calibration: full
+    repair_group: temperature
+    controller_overrides:
+      backtracking: {redecode_temperature: 0.6, repetition_penalty: 1.0, use_no_bad_ngrams: false, suspect_ngram_blocking: false}
+  repair_repetition_penalty:
+    kind: controller
+    calibration: full
+    repair_group: repetition_penalty
+    controller_overrides:
+      backtracking: {redecode_temperature: 1.0, repetition_penalty: 1.1, use_no_bad_ngrams: false, suspect_ngram_blocking: false}
+  repair_ngram_blocking:
+    kind: controller
+    calibration: full
+    repair_group: ngram_blocking
+    controller_overrides:
+      backtracking: {redecode_temperature: 1.0, repetition_penalty: 1.0, use_no_bad_ngrams: true, suspect_ngram_blocking: true}
+  self_consistency_5:
+    kind: sample_aggregate
+    num_samples: 5
+    selection: majority_answer
+  best_of_5_logprob:
+    kind: sample_aggregate
+    num_samples: 5
+    selection: mean_logprob
+
+analysis:
+  baseline: vanilla
+  bootstrap_seed: 20260811
+  bootstrap_samples: 10000

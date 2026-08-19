@@ -81,3 +81,8 @@ def load_config(path: str | Path) -> MGTBV3Config:
     with Path(path).open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     return _coerce_dataclass(MGTBV3Config, data)
+
+
+def config_from_dict(data: dict[str, Any]) -> MGTBV3Config:
+    """Build a controller config without creating an intermediate YAML file."""
+    return _coerce_dataclass(MGTBV3Config, data)

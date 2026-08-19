@@ -21,6 +21,7 @@ def calibrate_threshold(
     p_clip: float = 1e-6,
     refractory_windows: int = 0,
     grid_size: int = 80,
+    accumulation_mode: str = "cusum_reset",
 ) -> dict:
     runs = [_extract_pvalues(run) for run in healthy_runs]
     runs = [run for run in runs if run]
@@ -34,7 +35,10 @@ def calibrate_threshold(
     for threshold in candidates:
         false_alerts = 0
         for run in runs:
-            detector = EDetector(threshold, gammas=gammas, p_clip=p_clip, refractory_windows=refractory_windows)
+            detector = EDetector(
+                threshold, gammas=gammas, p_clip=p_clip,
+                refractory_windows=refractory_windows, accumulation_mode=accumulation_mode,
+            )
             alerted = any(detector.update(p)["alert"] for p in run)
             false_alerts += int(alerted)
         rate = false_alerts / len(runs)
@@ -50,6 +54,7 @@ def calibrate_threshold(
         "diagnostics": {
             "num_runs": len(runs),
             "target_false_alert_rate": target_false_alert_rate,
+            "accumulation_mode": accumulation_mode,
             "grid": diagnostics,
         },
     }
