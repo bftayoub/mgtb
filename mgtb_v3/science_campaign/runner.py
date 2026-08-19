@@ -43,10 +43,14 @@ def campaign_units(manifest: dict[str, Any], role: str, seeds: list[int]) -> lis
     for item in manifest["roles"][role]:
         for replicate_seed in seeds:
             unit_id = f"{item['item_id']}|replicate:{int(replicate_seed)}"
+            if int(replicate_seed) == 0 and item.get("item_seed") is not None:
+                generation_seed = int(item["item_seed"])
+            else:
+                generation_seed = stable_int_seed(manifest["protocol_seed"], item["item_id"], int(replicate_seed))
             units.append({
                 **item, "source_item_id": item["item_id"], "item_id": unit_id,
                 "replicate_seed": int(replicate_seed),
-                "item_seed": stable_int_seed(manifest["protocol_seed"], item["item_id"], int(replicate_seed)),
+                "item_seed": generation_seed,
             })
     return units
 

@@ -145,6 +145,15 @@ def test_campaign_analysis_pairs_units_and_adjusts_multiple_comparisons():
     assert "mcnemar_holm_adjusted_p" in result["comparisons"]["same"]
 
 
+def test_single_seed_campaign_preserves_prospective_manifest_seed():
+    manifest = {
+        "protocol_seed": 9,
+        "roles": {"test": [{"item_id": "x", "item_seed": 12345}]},
+    }
+    unit = runner.campaign_units(manifest, "test", [0])[0]
+    assert unit["item_seed"] == 12345
+
+
 def test_campaign_run_checkpoints_and_resumes_per_seed_unit(tmp_path, monkeypatch):
     campaign = load_campaign("configs/science_campaign/math500_exploratory_ablations.yaml")
     campaign["output_root"] = str(tmp_path / "campaign")

@@ -4,8 +4,20 @@ experimental_status: exploratory
 manifest: outputs/science_fast/splits/manifest.json
 output_root: outputs/science_campaign/math500_exploratory_v1
 controller_base: configs/science_fast/controller_v1.yaml
-parallel_workers: 4
-seeds: [0, 1, 2]
+parallel_workers: 6
+seeds: [0]
+
+# Reuse the authenticated single-seed 64/32 traces from the completed
+# prospective experiment. This rebuilds campaign-specific calibrators without
+# launching new model generations and verifies that the full threshold stays
+# identical to the prospective value.
+science_fast_reuse:
+  reference_run: outputs/science_fast/features/reference
+  development_run: outputs/science_fast/features/development
+  calibration_root: outputs/science_fast/calibration
+  feature_source: full
+  verify_calibration: full
+  calibrations: [full, entropy_only, repetition_only, entropy_repetition, global, no_reset]
 
 model:
   name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
@@ -46,9 +58,6 @@ calibrations:
   no_reset:
     feature_source: full
     accumulation_mode: no_reset
-  token_level_previous:
-    controller_overrides:
-      window: {window_size: 1, stride: 1}
 
 variants:
   vanilla:
@@ -57,11 +66,6 @@ variants:
     kind: controller
     calibration: full
     repair_group: full
-  previous_token_controller_proxy:
-    kind: controller
-    calibration: token_level_previous
-    controller_overrides:
-      window: {window_size: 1, stride: 1}
   matched_random:
     kind: matched_random
     profile: outputs/science_campaign/math500_exploratory_v1/profiles/full_mgtb.json
@@ -130,5 +134,6 @@ variants:
 
 analysis:
   baseline: vanilla
+  required_variants: [vanilla, full_mgtb, matched_random]
   bootstrap_seed: 20260811
   bootstrap_samples: 10000

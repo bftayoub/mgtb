@@ -1,5 +1,6 @@
 torch
-transformers
+transformers<5,>=4.47
+huggingface-hub<1.0,>=0.34
 accelerate
 numpy
 scipy

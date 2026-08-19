@@ -5,7 +5,8 @@ Summary: Window-level MGT-B v3 monitoring and backtracking controller for Huggin
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: torch
-Requires-Dist: transformers
+Requires-Dist: transformers<5,>=4.47
+Requires-Dist: huggingface-hub<1.0,>=0.34
 Requires-Dist: accelerate
 Requires-Dist: numpy
 Requires-Dist: scipy
@@ -24,6 +25,8 @@ Requires-Dist: datasets; extra == "eval"
 MGT-B v3 is a clean MVP for inference-time monitoring of autoregressive reasoning traces, aimed at small and quantized models such as INT4 HuggingFace causal LMs.
 
 The rebuilt prospective 300/100/300 protocol, including atomic resume and test freeze, is documented in [`docs/SCIENCE_FAST_RUNBOOK.md`](docs/SCIENCE_FAST_RUNBOOK.md).
+
+New multi-seed ablation and generalization campaigns use the separate, config-driven runner documented in [`docs/SCIENCE_CAMPAIGN_RUNBOOK.md`](docs/SCIENCE_CAMPAIGN_RUNBOOK.md). It preserves the historical `science_fast` result while adding per-unit checkpoints, live progress logs, method-specific calibration, campaign freeze and multi-method paired analysis.
 
 The controller does not fine-tune the language model. It monitors generated tokens, aggregates robust degeneration features over windows, detects suspicious regime changes, and can backtrack to a likely changepoint before re-decoding with targeted anti-degeneration constraints.
 

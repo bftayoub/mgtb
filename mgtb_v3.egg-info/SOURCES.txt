@@ -41,6 +41,12 @@ mgtb_v3/generation/hf_loop.py
 mgtb_v3/logging/__init__.py
 mgtb_v3/logging/plots.py
 mgtb_v3/logging/trace_logger.py
+mgtb_v3/science_campaign/__init__.py
+mgtb_v3/science_campaign/analysis.py
+mgtb_v3/science_campaign/calibration.py
+mgtb_v3/science_campaign/config.py
+mgtb_v3/science_campaign/manifest.py
+mgtb_v3/science_campaign/runner.py
 mgtb_v3/science_fast/__init__.py
 mgtb_v3/science_fast/analysis.py
 mgtb_v3/science_fast/artifacts.py
@@ -60,9 +66,11 @@ tests/test_hf_loop_sampling.py
 tests/test_math500_eval.py
 tests/test_precision_comparison_runner.py
 tests/test_repetition.py
+tests/test_science_campaign.py
 tests/test_science_fast_calibration.py
 tests/test_science_fast_freeze_analysis.py
 tests/test_science_fast_identity.py
+tests/test_science_fast_parallel.py
 tests/test_science_fast_protocol.py
 tests/test_science_fast_resume.py
 tests/test_science_fast_rollback.py

@@ -30,6 +30,28 @@ def _valid_rows(root: Path, manifest: dict, role: str, seeds: list[int]) -> list
     return [row for item in campaign_units(manifest, role, seeds) if (row := store.valid_artifact(item)) is not None]
 
 
+def _valid_science_fast_rows(root: Path, manifest: dict, role: str) -> list[dict]:
+    """Load authenticated single-seed artifacts produced by science_fast."""
+    state = load_json(root / "run_state.json")
+    store = RunStore(root, state["identity"])
+    return [row for item in manifest["roles"][role] if (row := store.valid_artifact(item)) is not None]
+
+
+def _write_calibration(
+    destination: Path, calibrator: dict, summary: dict, threshold: dict, *, replace: bool = False
+) -> None:
+    payloads = {
+        "calibrator.json": calibrator,
+        "reference_summary.json": summary,
+        "threshold.json": threshold,
+    }
+    for filename, payload in payloads.items():
+        path = destination / filename
+        if path.exists() and load_json(path) != payload and not replace:
+            raise ValueError(f"refusing to replace a different calibration artifact: {path}")
+        atomic_write_json(path, payload)
+
+
 def _source():
     return {"git_commit": git_commit(), "source_tree_sha256": source_tree_sha256(),
             "software_environment": software_environment(), "command": " ".join(sys.argv)}
@@ -39,7 +61,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Resumable, freeze-safe scientific ablation campaigns")
     parser.add_argument("--config", required=True)
     parser.add_argument("--action", required=True, choices=[
-        "build-manifest", "validate", "collect", "calibrate", "run", "build-profile", "freeze", "analyze", "status"
+        "build-manifest", "validate", "reuse-science-fast", "collect", "calibrate", "run",
+        "build-profile", "freeze", "analyze", "status"
     ])
     parser.add_argument("--role", choices=["reference", "development", "test"])
     parser.add_argument("--calibration")
@@ -74,6 +97,62 @@ def main(argv=None):
     workers = args.workers or int(campaign.get("parallel_workers", 1))
     seeds = [int(seed) for seed in campaign.get("seeds", [0])]
 
+    if args.action == "reuse-science-fast":
+        reuse = campaign.get("science_fast_reuse")
+        if not reuse:
+            raise ValueError("campaign has no science_fast_reuse section")
+        if seeds != [0]:
+            raise ValueError("science_fast reuse is restricted to the single replicate seed [0]")
+        reference_root = Path(reuse["reference_run"])
+        development_root = Path(reuse["development_run"])
+        reference = _valid_science_fast_rows(reference_root, manifest, "reference")
+        development = _valid_science_fast_rows(development_root, manifest, "development")
+        expected_ref = len(manifest["roles"]["reference"])
+        expected_dev = len(manifest["roles"]["development"])
+        if len(reference) != expected_ref or len(development) != expected_dev:
+            raise ValueError(
+                f"science_fast artifacts incomplete: reference={len(reference)}/{expected_ref} "
+                f"development={len(development)}/{expected_dev}"
+            )
+        requested = [args.calibration] if args.calibration else list(reuse.get("calibrations", ["full"]))
+        results = {}
+        source = {
+            "mode": "authenticated_science_fast_reuse",
+            "reference_run": str(reference_root.resolve()),
+            "reference_identity_sha256": load_json(reference_root / "run_state.json")["identity_sha256"],
+            "development_run": str(development_root.resolve()),
+            "development_identity_sha256": load_json(development_root / "run_state.json")["identity_sha256"],
+        }
+        for key in requested:
+            spec = calibration_spec(campaign, key)
+            source_key = spec.get("feature_source", key)
+            source_spec = calibration_spec(campaign, source_key)
+            if source_key != reuse.get("feature_source", "full"):
+                raise ValueError(f"calibration {key} requires unavailable feature source {source_key}")
+            if spec["controller"]["window"] != source_spec["controller"]["window"]:
+                raise ValueError(f"calibration {key} has incompatible window geometry")
+            calibrator, summary = build_calibrator(reference, spec, source)
+            threshold = select_threshold(development, calibrator, spec)
+            if key == reuse.get("verify_calibration", "full") and reuse.get("calibration_root"):
+                previous = load_json(Path(reuse["calibration_root"]) / "threshold.json")
+                if abs(float(previous["selected_h"]) - float(threshold["selected_h"])) > 1e-12:
+                    raise ValueError(
+                        f"reused full calibration changed selected_h: "
+                        f"{previous['selected_h']} != {threshold['selected_h']}"
+                    )
+            _write_calibration(root / "calibration" / key, calibrator, summary, threshold, replace=True)
+            target = float(spec["controller"]["detector"]["target_false_alert_rate"])
+            results[key] = {
+                "selected_h": threshold["selected_h"],
+                "healthy_alarm_rate": threshold["healthy_alarm_rate"],
+                "target_false_alert_rate": target,
+                "target_met": float(threshold["healthy_alarm_rate"]) <= target,
+                "calibrator_sha256": calibrator["calibrator_sha256"],
+                "threshold_sha256": threshold["threshold_sha256"],
+            }
+        print(json.dumps({"reused_without_generation": results}, indent=2))
+        return
+
     if args.action == "collect":
         if args.role not in {"reference", "development"} or not args.calibration:
             raise ValueError("collect requires --role reference|development and --calibration")
@@ -98,9 +177,7 @@ def main(argv=None):
         calibrator, summary = build_calibrator(reference, spec, _source())
         threshold = select_threshold(development, calibrator, spec)
         destination = root / "calibration" / args.calibration
-        atomic_write_json(destination / "calibrator.json", calibrator)
-        atomic_write_json(destination / "reference_summary.json", summary)
-        atomic_write_json(destination / "threshold.json", threshold)
+        _write_calibration(destination, calibrator, summary, threshold)
         print(json.dumps({"calibration": args.calibration, **summary,
                           "selected_h": threshold["selected_h"], "healthy_alarm_rate": threshold["healthy_alarm_rate"]}, indent=2))
         return
