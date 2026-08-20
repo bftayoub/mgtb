@@ -1,0 +1,19 @@
+schema_version: 1
+campaign_id: current_venv_reproducibility_b
+experimental_status: exploratory
+manifest: outputs/science_campaign/math500_all500_exploratory_v1/splits/manifest.json
+output_root: outputs/reproducibility/current_venv/b
+controller_base: configs/science_fast/controller_v1.yaml
+parallel_workers: 6
+seeds: [0]
+
+model:
+  name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+  precision: int4
+  device_map: {"": 0}
+  quantization: {quant_type: fp4, double_quant: false, compute_dtype: float16}
+
+generation: {dataset_kind: math500, prompt_style: math500_cot, max_new_tokens: 20000}
+variants: {vanilla: {kind: vanilla}}
+analysis: {baseline: vanilla, bootstrap_seed: 20260820, bootstrap_samples: 10000}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "python": "3.10.20",
+  "platform": "Linux-5.14.0-687.39.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "torch": "2.13.0+cu130",
+  "cuda_runtime": "13.0",
+  "gpu": "NVIDIA RTX A5000",
+  "driver": "595.84",
+  "critical_packages": {
+    "bitsandbytes": "0.50.1",
+    "datasets": "5.0.1",
+    "huggingface-hub": "0.36.2",
+    "numpy": "2.2.6",
+    "safetensors": "0.8.0",
+    "scipy": "1.15.3",
+    "tokenizers": "0.22.2",
+    "transformers": "4.57.6",
+    "triton": "3.7.1"
+  },
+  "requirements_lock": "requirements-lock-cu130.txt"
+}
