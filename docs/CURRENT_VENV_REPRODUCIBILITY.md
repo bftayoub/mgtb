@@ -62,6 +62,15 @@ cp -a outputs/science_campaign/math500_all500_exploratory_v1/calibration/full \
   --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action freeze
 ```
 
+Les 1 000 artefacts Vanilla des seeds 1–2 déjà exécutés sous le chemin historique sont importables sans régénération. L'import vérifie le manifeste, les seeds, le modèle, la génération et le contrôleur, puis conserve la provenance d'exécution historique dans chaque nouvel artefact :
+
+```bash
+.venv/bin/python scripts/import_campaign_artifacts.py \
+  --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml \
+  --source-run outputs/science_campaign/math500_all500_exploratory_seeds_1_2_v1/runs/test/vanilla \
+  --role test --variant vanilla
+```
+
 Lancer ensuite les variantes séparément, toutes appariées sur les mêmes 1 000 unités problème–seed :
 
 ```bash
