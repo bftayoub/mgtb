@@ -17,3 +17,4 @@ data/
 *.zip
 data/
 checkpoint*/
+backups/
