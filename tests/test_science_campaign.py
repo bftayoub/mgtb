@@ -11,7 +11,7 @@ from mgtb_v3.detector.e_detector import EDetector
 from mgtb_v3.generation.hf_loop import generate_with_mgtb_v3
 from mgtb_v3.science_campaign.analysis import campaign_analysis
 from mgtb_v3.science_campaign.calibration import build_calibrator, select_threshold
-from mgtb_v3.science_campaign.config import calibration_spec, load_campaign, resolve_variant
+from mgtb_v3.science_campaign.config import calibration_spec, load_campaign, resolve_variant, validate_campaign
 from mgtb_v3.science_campaign.manifest import assert_independent_test, build_manifest, derive_manifest, save_manifest
 from mgtb_v3.science_campaign import runner
 
@@ -124,6 +124,28 @@ def test_generic_manifest_is_disjoint_and_confirmatory_exclusion_detects_reuse(t
     save_manifest(old, manifest)
     with pytest.raises(ValueError, match="reuses"):
         assert_independent_test(manifest, [old])
+
+
+def test_frozen_confirmatory_evaluation_declares_planned_seeds_without_independence_claim():
+    campaign = {
+        "schema_version": 1,
+        "campaign_id": "replication",
+        "experimental_status": "confirmatory",
+        "confirmatory_design": "frozen_evaluation",
+        "no_retuning_from_prior_test": True,
+        "planned_seeds": [0, 1, 2],
+        "seeds": [1, 2],
+        "manifest": "manifest.json",
+        "output_root": "outputs/replication",
+        "controller_base": "controller.yaml",
+        "model": {"revision": "immutable"},
+        "generation": {"max_new_tokens": 1},
+        "variants": {"vanilla": {"kind": "vanilla"}},
+    }
+    validate_campaign(campaign)
+    campaign["no_retuning_from_prior_test"] = False
+    with pytest.raises(ValueError, match="no_retuning"):
+        validate_campaign(campaign)
 
 
 def test_derived_manifest_expands_test_without_changing_existing_selection(tmp_path):

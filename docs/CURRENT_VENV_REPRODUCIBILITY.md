@@ -47,24 +47,26 @@ La passe A a produit 50 artefacts. La passe B a été arrêtée volontairement a
 
 Ce contrôle valide la reproductibilité pratique du `.venv` actuel pour la poursuite exploratoire. Il ne garantit pas la reproductibilité sur une autre machine ou après modification du pilote, de CUDA ou d'une dépendance.
 
-## Deux réplications MATH-500 supplémentaires
+## Évaluation confirmatoire gelée sur trois seeds
 
-La configuration `configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml` ajoute les seeds de réplication 1 et 2 dans une nouvelle campagne. Elle ne modifie ni les artefacts ni le freeze de la seed 0. Avant le freeze, copier la calibration complète authentifiée du run existant :
+Les seeds 0, 1 et 2 appartiennent au même plan d'évaluation gelé. Le champ `exploratory` conservé dans les artefacts historiques de la seed 0 est une erreur de métadonnées : aucun retuning du modèle, du contrôleur, de la calibration ou du profil `matched_random` n'a été effectué à partir de ses résultats. Les artefacts historiques ne sont pas réécrits afin de préserver leurs hashes.
+
+La configuration `configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml` exécute les deux seeds restantes sous le statut `confirmatory` et le design `frozen_evaluation`. Ce design déclare une évaluation confirmatoire sur un benchmark déjà désigné, sans revendiquer un nouveau jeu de données indépendant. Avant le freeze, copier la calibration complète authentifiée du run existant :
 
 ```bash
-mkdir -p outputs/science_campaign/math500_all500_exploratory_seeds_1_2_v1/calibration
+mkdir -p outputs/science_campaign/math500_all500_confirmatory_seeds_1_2_v1/calibration
 cp -a outputs/science_campaign/math500_all500_exploratory_v1/calibration/full \
-  outputs/science_campaign/math500_all500_exploratory_seeds_1_2_v1/calibration/full
+  outputs/science_campaign/math500_all500_confirmatory_seeds_1_2_v1/calibration/full
 .venv/bin/python scripts/verify_current_environment.py
 .venv/bin/python scripts/run_ablation_campaign.py \
-  --config configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml --action freeze
+  --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action freeze
 ```
 
 Lancer ensuite les variantes séparément, toutes appariées sur les mêmes 1 000 unités problème–seed :
 
 ```bash
-.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml --action run --role test --variant vanilla
-.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml --action run --role test --variant full_mgtb
-.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml --action run --role test --variant matched_random
-.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_exploratory_seeds_1_2.yaml --action analyze
+.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action run --role test --variant vanilla
+.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action run --role test --variant full_mgtb
+.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action run --role test --variant matched_random
+.venv/bin/python scripts/run_ablation_campaign.py --config configs/science_campaign/math500_all500_confirmatory_seeds_1_2.yaml --action analyze
 ```

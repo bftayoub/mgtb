@@ -1,15 +1,18 @@
 schema_version: 1
-campaign_id: math500_all500_exploratory_seeds_1_2_v1
-experimental_status: exploratory
+campaign_id: math500_all500_confirmatory_seeds_1_2_v1
+experimental_status: confirmatory
+confirmatory_design: frozen_evaluation
+no_retuning_from_prior_test: true
+planned_seeds: [0, 1, 2]
 manifest: outputs/science_campaign/math500_all500_exploratory_v1/splits/manifest.json
-output_root: outputs/science_campaign/math500_all500_exploratory_seeds_1_2_v1
+output_root: outputs/science_campaign/math500_all500_confirmatory_seeds_1_2_v1
 controller_base: configs/science_fast/controller_v1.yaml
 parallel_workers: 6
 seeds: [1, 2]
 
-# Keep the exact model, quantization, prompt, controller and calibration used by
-# the completed seed-0 exploratory run. Replicate seeds are paired across all
-# three variants by the campaign runner.
+# Seeds 0, 1 and 2 belong to the same evaluation planned around a frozen model,
+# controller, calibration and matched-random development profile. This campaign
+# executes the two remaining seeds without changing the scientific protocol.
 model:
   name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
   revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562

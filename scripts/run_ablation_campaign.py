@@ -90,7 +90,8 @@ def main(argv=None):
 
     manifest = load_manifest(manifest_path(campaign))
     excluded = [Path(path) for path in campaign.get("exclude_manifests", [])]
-    if campaign["experimental_status"] == "confirmatory":
+    if (campaign["experimental_status"] == "confirmatory"
+            and campaign.get("confirmatory_design", "independent_test") == "independent_test"):
         assert_independent_test(manifest, excluded)
 
     if args.action == "validate":

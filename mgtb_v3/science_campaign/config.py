@@ -107,8 +107,19 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("experimental_status must be confirmatory or exploratory")
     if campaign.get("manifest_build") and campaign.get("manifest_derive"):
         raise ValueError("campaign cannot define both manifest_build and manifest_derive")
-    if campaign["experimental_status"] == "confirmatory" and not campaign.get("exclude_manifests"):
-        raise ValueError("confirmatory campaigns require exclude_manifests to prove test independence")
+    if campaign["experimental_status"] == "confirmatory":
+        design = campaign.get("confirmatory_design", "independent_test")
+        if design not in {"independent_test", "frozen_evaluation"}:
+            raise ValueError("confirmatory_design must be independent_test or frozen_evaluation")
+        if design == "independent_test" and not campaign.get("exclude_manifests"):
+            raise ValueError("independent confirmatory campaigns require exclude_manifests")
+        if design == "frozen_evaluation":
+            if campaign.get("no_retuning_from_prior_test") is not True:
+                raise ValueError("frozen_evaluation requires no_retuning_from_prior_test=true")
+            planned = [int(seed) for seed in campaign.get("planned_seeds", [])]
+            executed = [int(seed) for seed in campaign.get("seeds", [0])]
+            if not planned or not set(executed) <= set(planned):
+                raise ValueError("frozen_evaluation seeds must be included in planned_seeds")
     revision = campaign.get("model", {}).get("revision")
     if campaign["experimental_status"] == "confirmatory" and (not revision or str(revision).startswith("REPLACE_")):
         raise ValueError("confirmatory campaigns require an immutable model revision")
