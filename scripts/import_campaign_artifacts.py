@@ -43,7 +43,9 @@ def main() -> None:
     destination_variant = resolve_variant(campaign, args.variant)
     if source_resolved.get("role") != args.role:
         raise ValueError("source role does not match destination role")
-    if source_resolved.get("variant") != destination_variant:
+    # JSON artifacts encode tuples such as betting_gammas as lists. Compare the
+    # canonical JSON representation rather than Python container types.
+    if sha256_json(source_resolved.get("variant")) != sha256_json(destination_variant):
         raise ValueError("source variant/controller differs from destination")
     source_campaign = source_resolved.get("campaign", {})
     for key in ("manifest", "model", "generation", "seeds"):
