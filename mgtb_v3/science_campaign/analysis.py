@@ -11,12 +11,22 @@ def method_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"items": 0}
     accounts = [row["token_accounting"] for row in rows]
-    correct = np.array([float(row["scorer"].get("correct", 0.0)) for row in rows])
+    if any(row.get("scorer", {}).get("correct") is None or not row.get("scorer", {}).get("scorable", True) for row in rows):
+        raise ValueError("analysis refuses missing or explicitly unscorable verdicts")
+    correct = np.array([float(row["scorer"]["correct"]) for row in rows])
     by_seed: dict[int, list[float]] = defaultdict(list)
     by_subject: dict[str, list[float]] = defaultdict(list)
+    by_domain: dict[str, list[float]] = defaultdict(list)
+    by_difficulty: dict[str, list[float]] = defaultdict(list)
     for row, value in zip(rows, correct):
         by_seed[int(row.get("replicate_seed", 0))].append(float(value))
         by_subject[str(row.get("item_metadata", {}).get("subject") or "unknown")].append(float(value))
+        metadata = row.get("item_metadata", {})
+        domains = metadata.get("domains") or [metadata.get("subject") or "unknown"]
+        for domain in domains:
+            by_domain[str(domain)].append(float(value))
+        difficulty = metadata.get("difficulty", metadata.get("level"))
+        by_difficulty[str(difficulty if difficulty is not None else "unknown")].append(float(value))
     candidate_rows = [row for row in rows if row.get("candidates")]
     seed_accuracies = [float(np.mean(values)) for values in by_seed.values()]
     return {
@@ -25,6 +35,14 @@ def method_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "accuracy_seed_std": float(np.std(seed_accuracies, ddof=1)) if len(seed_accuracies) > 1 else 0.0,
         "accuracy_by_subject": {subject: {"items": len(values), "accuracy": float(np.mean(values))}
                                 for subject, values in sorted(by_subject.items())},
+        "accuracy_by_domain_descriptive": {
+            domain: {"items": len(values), "accuracy": float(np.mean(values))}
+            for domain, values in sorted(by_domain.items())
+        },
+        "accuracy_by_difficulty_descriptive": {
+            difficulty: {"items": len(values), "accuracy": float(np.mean(values))}
+            for difficulty, values in sorted(by_difficulty.items())
+        },
         "extractability": float(np.mean([bool(row["scorer"].get("answer_extraction_ok")) for row in rows])),
         "truncation_rate": float(np.mean([bool(row.get("truncated")) for row in rows])),
         "items_with_alarm_rate": float(np.mean([int(a.get("alarms", 0)) > 0 for a in accounts])),
@@ -35,6 +53,18 @@ def method_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_sampled_tokens": float(np.mean([int(a.get("sampled", 0)) for a in accounts])),
         "mean_latency_seconds": float(np.mean([float(row.get("timing", {}).get("wall_seconds", 0)) for row in rows])),
         "peak_vram_bytes": max([int(row.get("timing", {}).get("peak_vram_bytes") or 0) for row in rows] or [0]),
+        "evaluated_generation_cost": {
+            "sampled_tokens": sum(int(a.get("sampled", 0)) for a in accounts),
+            "wall_seconds": sum(float(row.get("timing", {}).get("wall_seconds", 0.0)) for row in rows),
+            "api_cost_usd": 0.0,
+            "cost_note": "local model inference; hardware cost is reported as time/tokens and is not monetized",
+        },
+        "judge_cost": {
+            "sampled_tokens": sum(int(row.get("judge", {}).get("judge_cost", {}).get("sampled_tokens", 0)) for row in rows),
+            "wall_seconds": sum(float(row.get("judge", {}).get("judge_cost", {}).get("wall_seconds", 0.0)) for row in rows),
+            "api_cost_usd": sum(float(row.get("judge", {}).get("judge_cost", {}).get("api_cost_usd", 0.0)) for row in rows),
+            "separate_from_evaluated_generation": True,
+        },
         "termination_reasons": dict(Counter(a.get("termination_reason", "unknown") for a in accounts)),
         "candidate_oracle_pass_rate": (
             float(np.mean([any(bool(candidate["scorer"].get("correct")) for candidate in row["candidates"])
@@ -97,7 +127,8 @@ def _holm_adjust(comparisons: dict[str, dict[str, Any]]) -> None:
 
 
 def campaign_analysis(runs: dict[str, list[dict[str, Any]]], *, baseline: str,
-                      bootstrap_seed: int = 20260811, bootstrap_samples: int = 10000) -> dict[str, Any]:
+                      bootstrap_seed: int = 20260811, bootstrap_samples: int = 10000,
+                      require_no_alarm_identity: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
     if baseline not in runs:
         raise ValueError(f"analysis baseline {baseline!r} has no run")
     summaries = {name: method_summary(rows) for name, rows in runs.items()}
@@ -105,8 +136,16 @@ def campaign_analysis(runs: dict[str, list[dict[str, Any]]], *, baseline: str,
         name: paired_comparison(runs[baseline], rows, seed=bootstrap_seed, samples=bootstrap_samples)
         for name, rows in runs.items() if name != baseline
     }
+    for name in require_no_alarm_identity:
+        if name not in comparisons:
+            raise ValueError(f"required no-alarm identity variant has no baseline comparison: {name}")
+        comparison = comparisons[name]
+        if comparison["no_alarm_units"] and comparison["token_identical_no_alarm_rate"] != 1.0:
+            raise ValueError(f"{name} diverged token-by-token from {baseline} on a no-alarm trajectory")
     _holm_adjust(comparisons)
     return {
         "baseline": baseline, "methods": summaries, "comparisons": comparisons,
         "multiplicity": "Holm adjustment across McNemar comparisons against the declared baseline",
+        "primary_inference": "paired bootstrap clustered by source problem; replicate seeds stay within clusters",
+        "subgroup_note": "domain and difficulty summaries are descriptive unless separately preregistered",
     }

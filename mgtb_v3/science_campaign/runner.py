@@ -17,12 +17,13 @@ from mgtb_v3.calibration.positional import PositionalCalibrator
 from mgtb_v3.config import config_from_dict
 from mgtb_v3.eval.gsm8k import format_gsm8k_prompt, score_gsm8k
 from mgtb_v3.eval.math500 import format_math500_prompt, score_math500
+from mgtb_v3.eval.omni_math import format_omni_math_prompt, pending_omni_math_score
 from mgtb_v3.generation.hf_loop import generate_with_mgtb_v3
 from mgtb_v3.science_fast.artifacts import RunStore
-from mgtb_v3.science_fast.io import atomic_write_json, load_json, sha256_json
+from mgtb_v3.science_fast.io import atomic_write_json, load_json, sha256_file, sha256_json
 from mgtb_v3.science_fast.provenance import git_commit, software_environment, source_tree_sha256
 
-from .config import calibration_spec, output_root, resolve_variant
+from .config import calibration_spec, output_root, resolve_variant, role_seeds
 
 _WORKER_SPEC: dict[str, Any] | None = None
 _WORKER_CONTEXT: dict[str, Any] | None = None
@@ -96,6 +97,8 @@ def _prompt(item: dict[str, Any], campaign: dict[str, Any]) -> str:
     kind = item.get("dataset_kind", campaign["generation"].get("dataset_kind", "math500"))
     if kind == "gsm8k":
         return format_gsm8k_prompt(item["problem"], style)
+    if kind == "omni_math":
+        return format_omni_math_prompt(item["problem"], style)
     return format_math500_prompt(item["problem"], style)
 
 
@@ -103,6 +106,8 @@ def _score(text: str, item: dict[str, Any], campaign: dict[str, Any]) -> dict[st
     kind = item.get("dataset_kind", campaign["generation"].get("dataset_kind", "math500"))
     if kind == "gsm8k":
         return score_gsm8k(text, item["reference_answer"])
+    if kind == "omni_math":
+        return pending_omni_math_score(text, item["reference_answer"])
     return score_math500(text, item["reference_answer"])
 
 
@@ -176,6 +181,7 @@ def _single_generation(item: dict[str, Any], context: dict[str, Any], *, seed: i
     peak = int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else None
     return {
         "generation": generation, "token_ids": completion_ids, "scorer": _score(generation, item, context["campaign"]),
+        "prompt_token_count": len(prompt_ids),
         "sampled_tokens": result.sampled_tokens, "emitted_tokens": result.emitted_tokens,
         "deleted_tokens": result.deleted_tokens, "alerts": [vars(a) for a in result.alerts],
         "backtracks": result.backtracks, "monitor_trace": trace,
@@ -260,6 +266,8 @@ def _generate_item(item: dict[str, Any], context: dict[str, Any]) -> dict[str, A
     result["item_metadata"] = {
         "dataset_name": item.get("dataset_name"), "dataset_kind": item.get("dataset_kind"),
         "split": item.get("split"), "subject": item.get("subject"), "level": item.get("level"),
+        "domains": item.get("domains"), "difficulty": item.get("difficulty"),
+        "source_id": item.get("source_id"), "source_provenance": item.get("source_provenance"),
     }
     result["provenance"] = {**context["source"], "run_identity_sha256": context["run_identity_sha256"],
                             "variant_sha256": variant["variant_sha256"],
@@ -294,7 +302,7 @@ def run_variant(*, campaign: dict[str, Any], manifest: dict[str, Any], role: str
         raise ValueError("test run requires campaign freeze")
     if freeze is not None:
         assert_freeze(campaign, manifest, freeze, variant_name)
-    seeds = [int(seed) for seed in campaign.get("seeds", [0])]
+    seeds = role_seeds(campaign, role)
     units = campaign_units(manifest, role, seeds)
     root = output_root(campaign) / "runs" / role / variant_name
     source = {"git_commit": git_commit(), "source_tree_sha256": source_tree_sha256(),
@@ -344,7 +352,9 @@ def run_variant(*, campaign: dict[str, Any], manifest: dict[str, Any], role: str
         pool = mp.Pool(processes=min(int(workers), len(pending) or 1), initializer=_configure_worker, initargs=(spec,))
         iterator = pool.imap_unordered(_worker, pending, chunksize=1)
     by_id = {item["item_id"]: item for item in pending}
-    progress_correct = sum(float(row.get("scorer", {}).get("correct", 0.0)) for row in existing_rows)
+    existing_correct = [row.get("scorer", {}).get("correct") for row in existing_rows]
+    progress_correct = sum(float(value) for value in existing_correct if value is not None)
+    progress_scored = sum(value is not None for value in existing_correct)
     progress_sampled = sum(int(row.get("token_accounting", {}).get("sampled", 0)) for row in existing_rows)
     progress_completed = len(existing_rows)
     try:
@@ -352,13 +362,16 @@ def run_variant(*, campaign: dict[str, Any], manifest: dict[str, Any], role: str
             store.save(by_id[item_id], artifact)
             state = load_json(store.state_path)
             progress_completed += 1
-            progress_correct += float(artifact["scorer"].get("correct", 0.0))
+            correct = artifact["scorer"].get("correct")
+            if correct is not None:
+                progress_correct += float(correct)
+                progress_scored += 1
             progress_sampled += int(artifact["token_accounting"]["sampled"])
             event = {"timestamp": time.time(), "event": "item_completed", "item_id": item_id,
                      "completed": state["completed_count"], "target": len(units),
                      "correct": artifact["scorer"].get("correct"),
                      "sampled_tokens": artifact["token_accounting"]["sampled"],
-                     "running_accuracy": progress_correct / progress_completed,
+                     "running_accuracy": progress_correct / progress_scored if progress_scored else None,
                      "running_mean_sampled_tokens": progress_sampled / progress_completed,
                      "run_identity_sha256": store.identity_sha256}
             _append_event(root, event)
@@ -394,15 +407,28 @@ def collect_features(*, campaign: dict[str, Any], manifest: dict[str, Any], role
 def build_profile(artifacts: list[dict[str, Any]], source: dict[str, Any]) -> dict[str, Any]:
     templates = []
     for artifact in artifacts:
-        spans = [int(row.get("rollback_span", 0)) for row in artifact.get("backtracks", []) if int(row.get("rollback_span", 0)) > 0]
-        templates.append({"rollback_lengths": spans,
-                          "reference_primary_tokens": int(artifact["token_accounting"]["emitted"]),
-                          "extra_decode_tokens": int(artifact["token_accounting"]["deleted"])})
+        backtracks = [row for row in artifact.get("backtracks", []) if int(row.get("rollback_span", 0)) > 0]
+        spans = [int(row["rollback_span"]) for row in backtracks]
+        prompt_tokens = int(artifact.get("prompt_token_count", 0))
+        observed_positions = [
+            max(0, int((row.get("alert") or {}).get("token_pos", 0)) - prompt_tokens)
+            for row in backtracks
+        ]
+        primary = int(artifact["token_accounting"]["emitted"])
+        templates.append({
+            "backtrack_count": len(spans), "rollback_lengths": spans,
+            "observed_trigger_positions": observed_positions,
+            "position_constraints": {"minimum_position": 64, "maximum_position": max(65, primary)},
+            "reference_primary_tokens": primary,
+            "extra_decode_tokens": int(artifact["token_accounting"]["deleted"]),
+        })
     if not templates:
         raise ValueError("profile requires development artifacts")
     profile = {"schema_version": 1, "templates": templates,
                "summary": {"num_examples": len(templates),
                            "activation_rate": sum(bool(row["rollback_lengths"]) for row in templates) / len(templates),
+                           "mean_interventions": sum(row["backtrack_count"] for row in templates) / len(templates),
+                           "mean_primary_tokens": sum(row["reference_primary_tokens"] for row in templates) / len(templates),
                            "mean_extra_decode_tokens": sum(row["extra_decode_tokens"] for row in templates) / len(templates)},
                "source": source}
     profile["profile_sha256"] = sha256_json(profile)
@@ -414,6 +440,31 @@ def build_freeze(campaign: dict[str, Any], manifest: dict[str, Any]) -> dict[str
     for name, variant in resolved.items():
         if variant["kind"] == "matched_random" and not Path(variant["profile"]).is_file():
             raise ValueError(f"matched-random profile missing for {name}: {variant['profile']}")
+        if variant["kind"] == "matched_random":
+            profile = load_json(variant["profile"])
+            expected_profile = sha256_json({key: value for key, value in profile.items() if key != "profile_sha256"})
+            if profile.get("profile_sha256") != expected_profile:
+                raise ValueError(f"matched-random profile hash mismatch for {name}")
+            if campaign.get("generation", {}).get("dataset_kind") == "omni_math":
+                source = profile.get("source", {})
+                if (source.get("campaign_id") != campaign["campaign_id"]
+                        or source.get("manifest_sha256") != manifest["manifest_sha256"]
+                        or source.get("variant") != "full_mgtb"
+                        or source.get("role") != "development"
+                        or [int(seed) for seed in source.get("seeds", [])] != role_seeds(campaign, "development")
+                        or source.get("correctness_labels_used") is not False):
+                    raise ValueError("Omni-MATH matched-random profile is not prospective campaign-local development data")
+                development_root = output_root(campaign) / "runs" / "development" / "full_mgtb"
+                state_path = development_root / "run_state.json"
+                if not state_path.is_file():
+                    raise ValueError("Omni-MATH matched-random profile source run is missing")
+                state = load_json(state_path)
+                store = RunStore(development_root, state["identity"])
+                units = campaign_units(manifest, "development", role_seeds(campaign, "development"))
+                rows = [row for unit in units if (row := store.valid_artifact(unit)) is not None]
+                actual_artifacts = sorted(row["artifact_sha256"] for row in rows)
+                if len(rows) != len(units) or source.get("source_artifact_sha256") != actual_artifacts:
+                    raise ValueError("Omni-MATH matched-random profile source artifacts are incomplete or changed")
     variants = {name: variant["variant_sha256"] for name, variant in resolved.items()}
     calibrations = {}
     for key in campaign.get("calibrations", {}):
@@ -421,13 +472,31 @@ def build_freeze(campaign: dict[str, Any], manifest: dict[str, Any]) -> dict[str
         calibrations[key] = {
             "calibrator_sha256": load_json(root / "calibrator.json")["calibrator_sha256"],
             "threshold_sha256": load_json(root / "threshold.json")["threshold_sha256"],
+            "reference_summary_file_sha256": sha256_file(root / "reference_summary.json"),
         }
+    excluded = []
+    for raw_path in campaign.get("exclude_manifests", []):
+        path = Path(raw_path)
+        if not path.is_file():
+            raise ValueError(f"excluded manifest missing at freeze: {path}")
+        old = load_json(path)
+        excluded.append({
+            "path": str(path.resolve()), "manifest_sha256": old.get("manifest_sha256"),
+            "file_sha256": sha256_file(path),
+        })
     payload = {
-        "schema_version": 1, "campaign_id": campaign["campaign_id"],
+        "schema_version": 2, "campaign_id": campaign["campaign_id"],
         "experimental_status": campaign["experimental_status"], "manifest_sha256": manifest["manifest_sha256"],
-        "test_items": [{"item_id": row["item_id"], "content_sha256": row["content_sha256"]} for row in manifest["roles"]["test"]],
+        "split_items": {
+            role: [{"item_id": row["item_id"], "source_id": row["source_id"], "content_sha256": row["content_sha256"]}
+            for row in items] for role, items in manifest["roles"].items()
+        },
+        "dataset_revisions": manifest.get("dataset_revisions"),
+        "source_authentication": manifest.get("source_authentication"),
+        "excluded_manifests": excluded,
         "campaign_config_sha256": sha256_json({k: v for k, v in campaign.items() if not k.startswith("_")}),
         "variants": variants, "calibrations": calibrations,
+        "evaluation": campaign.get("evaluation"),
         "source": {"git_commit": git_commit(), "source_tree_sha256": source_tree_sha256()},
         "software_environment": software_environment(),
     }
@@ -441,6 +510,18 @@ def assert_freeze(campaign: dict[str, Any], manifest: dict[str, Any], freeze: di
         raise ValueError("freeze hash mismatch")
     if freeze.get("manifest_sha256") != manifest["manifest_sha256"]:
         raise ValueError("freeze manifest mismatch")
+    if int(freeze.get("schema_version", 1)) >= 2:
+        split_items = {
+            role: [{"item_id": row["item_id"], "source_id": row["source_id"], "content_sha256": row["content_sha256"]}
+                   for row in items]
+            for role, items in manifest["roles"].items()
+        }
+        if freeze.get("split_items") != split_items:
+            raise ValueError("freeze split IDs/hashes mismatch")
+        if freeze.get("source_authentication") != manifest.get("source_authentication"):
+            raise ValueError("freeze dataset source authentication mismatch")
+        if freeze.get("evaluation") != campaign.get("evaluation"):
+            raise ValueError("freeze evaluation/judge mismatch")
     if freeze.get("variants", {}).get(variant) != resolve_variant(campaign, variant)["variant_sha256"]:
         raise ValueError("freeze variant mismatch")
     config_hash = sha256_json({k: v for k, v in campaign.items() if not k.startswith("_")})
@@ -450,5 +531,10 @@ def assert_freeze(campaign: dict[str, Any], manifest: dict[str, Any], freeze: di
         calibrator, threshold = _calibration_payload(campaign, key)
         if calibrator["calibrator_sha256"] != expected_hashes["calibrator_sha256"] or threshold["threshold_sha256"] != expected_hashes["threshold_sha256"]:
             raise ValueError(f"freeze calibration mismatch for {key}")
+        summary_path = output_root(campaign) / "calibration" / key / "reference_summary.json"
+        if expected_hashes.get("reference_summary_file_sha256") and sha256_file(summary_path) != expected_hashes["reference_summary_file_sha256"]:
+            raise ValueError(f"freeze calibration summary mismatch for {key}")
     if freeze.get("source", {}).get("git_commit") != git_commit() or freeze.get("source", {}).get("source_tree_sha256") != source_tree_sha256():
         raise ValueError("freeze source mismatch")
+    if int(freeze.get("schema_version", 1)) >= 2 and freeze.get("software_environment") != software_environment():
+        raise ValueError("freeze software/hardware environment mismatch")

@@ -65,9 +65,14 @@ def assigned_template(profile: dict[str, Any], *, base_seed: int, precision: str
 
 def random_schedule(template: dict[str, Any], *, seed: int, minimum_position: int = 64) -> list[dict[str, int]]:
     lengths = [max(1, int(value)) for value in template.get("rollback_lengths", [])]
-    reference_length = max(minimum_position + 1, int(template.get("reference_primary_tokens", minimum_position + 1)))
+    constraints = template.get("position_constraints") or {}
+    constrained_minimum = max(minimum_position, int(constraints.get("minimum_position", minimum_position)))
+    reference_length = max(
+        constrained_minimum + 1,
+        int(constraints.get("maximum_position", template.get("reference_primary_tokens", constrained_minimum + 1))),
+    )
     rng = random.Random(seed)
-    positions = sorted(rng.randint(minimum_position, reference_length) for _ in lengths)
+    positions = sorted(rng.randint(constrained_minimum, reference_length) for _ in lengths)
     return [{"trigger_at": position, "rollback_tokens": length} for position, length in zip(positions, lengths)]
 
 

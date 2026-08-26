@@ -1,0 +1,86 @@
+schema_version: 1
+campaign_id: omnimath_confirmatory_v1
+experimental_status: confirmatory
+confirmatory_design: independent_test
+manifest: outputs/science_campaign/omnimath_confirmatory_v1/splits/manifest.json
+output_root: outputs/science_campaign/omnimath_confirmatory_v1
+controller_base: configs/science_fast/controller_v1.yaml
+parallel_workers: 6
+# Three seeds are reserved for the frozen test only. Calibration and the
+# development-only matched-random profile use one prospective trajectory/item.
+seeds: [0, 1, 2]
+prospective_seeds: [0]
+
+# Every role is selected prospectively from the one official, revision-pinned
+# Omni-MATH JSONL. Every normalized statement observed in either existing
+# MATH-500 manifest is removed before any role is selected.
+exclude_manifests:
+  - outputs/science_fast/splits/manifest.json
+  - outputs/science_campaign/math500_all500_exploratory_v1/splits/manifest.json
+
+manifest_build:
+  strategy: stratified_omni_math_v1
+  protocol_seed: 20260824
+  counts: {reference: 300, development: 300, test: 500}
+  source:
+    repository: KbsdJames/Omni-MATH
+    revision: 23be225c8e268df51990f6c5c1448f34d3b56911
+    path: Omni-Math.jsonl
+    git_blob_sha1: 1a9d46a3a2b52992b010152e8e090f5fb7e7cb4a
+
+model:
+  name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+  precision: int4
+  device_map: {"": 0}
+  quantization: {quant_type: fp4, double_quant: false, compute_dtype: float16}
+
+generation:
+  dataset_kind: omni_math
+  prompt_style: math500_cot
+  max_new_tokens: 20000
+
+# The detector, score, window geometry, target false-alert rate and repair
+# operator all come unchanged from controller_v1.yaml. Only the empirical
+# feature distribution and threshold are re-estimated. Correctness labels are
+# explicitly ignored for both reference calibration and development threshold.
+calibrations:
+  full:
+    calibration_mode: positional
+    accumulation_mode: cusum_reset
+    eligibility: non_truncated
+
+variants:
+  vanilla: {kind: vanilla}
+  full_mgtb: {kind: controller, calibration: full, repair_group: full}
+  matched_random:
+    kind: matched_random
+    profile: outputs/science_campaign/omnimath_confirmatory_v1/profiles/full_mgtb.json
+    minimum_position: 64
+    repair_group: full
+
+# The simple MATH-500 text normalizer is not valid for general Omni-MATH
+# equivalence. This pins the official local judge, its upstream implementation,
+# deterministic decoding and custom-tokenizer prompt implementation.
+evaluation:
+  method: official_omni_judge
+  judge:
+    model: KbsdJames/Omni-Judge
+    revision: de5bdca15ff3c366b90718c4b4be555d25c655b0
+    official_repository: KbsdJames/Omni-MATH
+    official_code_revision: 23be225c8e268df51990f6c5c1448f34d3b56911
+    official_code_path: Omni-Judge_eval/omni_judge.py
+    official_code_git_blob_sha1: 1a10e541366f3fdd0c4fd40a672ea14a36cbcd73
+    prompt_implementation: pinned Omni-Judge tokenizer.get_context
+    decoding: {do_sample: false, num_return_sequences: 1}
+    max_new_tokens: 300
+    batch_size: 4
+    torch_dtype: bfloat16
+    device_map: auto
+
+analysis:
+  baseline: vanilla
+  required_variants: [vanilla, full_mgtb, matched_random]
+  bootstrap_seed: 20260824
+  bootstrap_samples: 10000
+  require_token_identity_without_alarm: [full_mgtb]

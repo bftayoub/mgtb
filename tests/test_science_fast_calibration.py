@@ -6,6 +6,7 @@ from mgtb_v3.config import ScoreConfig
 from mgtb_v3.features.window_features import linear_window_score
 from mgtb_v3.features.entropy import chosen_logprob_from_logits, entropy_from_logits
 from mgtb_v3.science_fast.calibration import build_reference_calibrator, select_development_threshold
+from mgtb_v3.calibration.threshold import calibrate_threshold
 from mgtb_v3.types import WindowFeatures
 
 
@@ -51,3 +52,15 @@ def test_reference_only_healthy_and_development_selects_h():
     assert math.isfinite(threshold["selected_h"])
     assert threshold["healthy_denominator"] == 40
     assert threshold["healthy_alarm_rate"] <= 0.05
+
+
+def test_threshold_is_not_limited_by_the_old_fixed_grid_cap():
+    # Identical long anomalous trajectories all exceed the historical 1e8
+    # factor cap. A 5% target with 20 tied runs must conservatively select a
+    # finite threshold above every observed maximum and achieve zero alerts.
+    runs = [{"p_values": [1e-6] * 40} for _ in range(20)]
+    result = calibrate_threshold(runs, target_false_alert_rate=0.05, p_clip=1e-6)
+    assert math.isfinite(result["threshold"])
+    assert result["threshold"] > 1e8
+    assert result["observed_false_alert_rate"] == 0.0
+    assert result["diagnostics"]["selection_method"] == "empirical_max_loge_order_statistic"

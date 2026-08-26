@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -97,6 +98,12 @@ def manifest_path(campaign: dict[str, Any]) -> Path:
     return _path(campaign, campaign["manifest"])
 
 
+def role_seeds(campaign: dict[str, Any], role: str) -> list[int]:
+    """Use prospective seeds for calibration/development, test seeds for inference."""
+    key = "prospective_seeds" if role in {"reference", "development"} else "seeds"
+    return [int(seed) for seed in campaign.get(key, campaign.get("seeds", [0]))]
+
+
 def validate_campaign(campaign: dict[str, Any]) -> None:
     if int(campaign.get("schema_version", -1)) != SCHEMA_VERSION:
         raise ValueError(f"campaign schema_version must be {SCHEMA_VERSION}")
@@ -126,8 +133,37 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     for name, variant in campaign["variants"].items():
         if variant.get("kind", "controller") not in VARIANT_KINDS:
             raise ValueError(f"unsupported variant kind for {name}: {variant.get('kind')}")
+    for key in ("seeds", "prospective_seeds"):
+        if key in campaign:
+            values = [int(seed) for seed in campaign[key]]
+            if not values or len(values) != len(set(values)):
+                raise ValueError(f"{key} must be a non-empty list of unique integer seeds")
     for key, spec in campaign.get("calibrations", {}).items():
         if spec.get("calibration_mode", "positional") not in {"positional", "global"}:
             raise ValueError(f"invalid calibration_mode for {key}")
         if spec.get("accumulation_mode", "cusum_reset") not in {"cusum_reset", "no_reset"}:
             raise ValueError(f"invalid accumulation_mode for {key}")
+        if spec.get("eligibility", "correct_extractable_non_truncated") not in {
+            "correct_extractable_non_truncated", "non_truncated"
+        }:
+            raise ValueError(f"invalid calibration eligibility for {key}")
+    build = campaign.get("manifest_build", {})
+    if build.get("strategy") == "stratified_omni_math_v1":
+        source = build.get("source", {})
+        if source.get("repository") != "KbsdJames/Omni-MATH" or source.get("path") != "Omni-Math.jsonl":
+            raise ValueError("Omni-MATH campaigns require the official KbsdJames/Omni-MATH source")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(source.get("revision", ""))):
+            raise ValueError("Omni-MATH source requires an immutable Git revision")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(source.get("git_blob_sha1", ""))):
+            raise ValueError("Omni-MATH source requires the pinned data git blob")
+        evaluation = campaign.get("evaluation", {})
+        judge = evaluation.get("judge", {})
+        if evaluation.get("method") != "official_omni_judge":
+            raise ValueError("Omni-MATH campaigns require explicit official_omni_judge evaluation")
+        for key in ("model", "revision", "official_code_revision", "official_code_git_blob_sha1"):
+            if not judge.get(key):
+                raise ValueError(f"Omni-MATH judge requires pinned {key}")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(judge["revision"])):
+            raise ValueError("Omni-Judge model requires an immutable revision")
+        if role_seeds(campaign, "reference") != [0] or role_seeds(campaign, "development") != [0]:
+            raise ValueError("Omni-MATH prospective calibration/development runs require prospective_seeds: [0]")
