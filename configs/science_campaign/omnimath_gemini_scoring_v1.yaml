@@ -1,0 +1,26 @@
+schema_version: 1
+source_root: outputs/science_campaign/omnimath_confirmatory_v1_judge_batch1
+manifest: outputs/science_campaign/omnimath_confirmatory_v1/splits/manifest.json
+output_root: outputs/gemini_scoring/omnimath_confirmatory_v1
+variants: [vanilla, full_mgtb, matched_random]
+temperature: 0
+max_output_tokens: 4096
+permutation_salt: omnimath-gemini-blind-v1-20260831
+primary:
+  model: gemini-3.5-flash-lite
+  rpm: 12
+  tpm: 200000
+  rpd: 500
+  thinking_level: high
+secondary:
+  model: gemini-3.5-flash
+  rpm: 5
+  tpm: 250000
+  rpd: 20
+  thinking_level: high
+pilot_counts:
+  numeric_contradictions: 98
+  manifest_equalities: 50
+  symbolic: 52
+individual_audit_count: 50
+secondary_audit_count: 5

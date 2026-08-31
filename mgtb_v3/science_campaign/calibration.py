@@ -13,6 +13,14 @@ from mgtb_v3.science_fast.io import sha256_json
 from mgtb_v3.types import WindowFeatures
 
 
+def _eligible(artifact: dict[str, Any], spec: dict[str, Any]) -> bool:
+    mode = spec.get("eligibility", "correct_extractable_non_truncated")
+    if mode == "non_truncated":
+        # Prospective distribution calibration: no correctness/reference label is read.
+        return not bool(artifact.get("truncated"))
+    return is_healthy(artifact)
+
+
 def _scored_windows(artifact: dict[str, Any], controller: dict[str, Any]):
     score_cfg = config_from_dict(controller).score
     for event in artifact.get("monitor_trace", []):
@@ -32,7 +40,7 @@ def build_calibrator(
     healthy = []
     calibrator_helper = PositionalCalibrator(buckets=buckets)
     for artifact in artifacts:
-        if not is_healthy(artifact):
+        if not _eligible(artifact, spec):
             continue
         healthy.append({"item_id": artifact["item_id"], "content_sha256": artifact["content_sha256"]})
         for features, score in _scored_windows(artifact, spec["controller"]):
@@ -46,6 +54,8 @@ def build_calibrator(
         "calibration_spec_sha256": spec["calibration_sha256"],
         "calibration_mode": mode,
         "accumulation_mode": spec.get("accumulation_mode", "cusum_reset"),
+        "eligibility": spec.get("eligibility", "correct_extractable_non_truncated"),
+        "correctness_labels_used": spec.get("eligibility", "correct_extractable_non_truncated") != "non_truncated",
         "buckets": buckets,
         "p_clip": float(spec["controller"]["detector"]["p_clip"]),
         "score_pools_by_bucket": dict(pools),
@@ -72,7 +82,7 @@ def select_threshold(
     )
     runs = []
     for artifact in artifacts:
-        if not is_healthy(artifact):
+        if not _eligible(artifact, spec):
             continue
         values = [calibrator.p_value(score, features.end_pos) for features, score in _scored_windows(artifact, spec["controller"])]
         if values:

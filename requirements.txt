@@ -10,3 +10,5 @@ tqdm
 pytest
 matplotlib
 bitsandbytes
+# Optional Omni-MATH Gemini scorer (kept exact for judge provenance).
+google-genai==2.20.0

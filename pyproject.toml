@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 eval = ["datasets"]
+gemini = ["google-genai==2.20.0"]
 
 [tool.setuptools.packages.find]
 include = ["mgtb_v3*"]
